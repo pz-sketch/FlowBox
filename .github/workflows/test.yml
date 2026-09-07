@@ -36,21 +36,3 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer || true
       - name: Run swift test (best effort, swift-testing needs recent toolchain)
         run: swift test
-
-  package:
-    runs-on: macos-14
-    needs: [build, test-runner]
-    if: github.event_name == 'push'
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-      - name: Select latest Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer || true
-      - name: Build DMG via dist.sh (ad-hoc signed, for smoke testing only)
-        run: ./dist.sh
-      - name: Upload DMG artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: FlowBox-${{ github.sha }}
-          path: dist/FlowBox.dmg
-          retention-days: 14
