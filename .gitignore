@@ -1,0 +1,19 @@
+# Swift Package Manager 构建产物
+.build/
+*.swiftpm/
+
+# macOS
+.DS_Store
+
+# 分发产物
+dist/
+*.dmg
+
+# 本地笔记与 IDE 配置
+todo.md
+todo/
+.idea/
+
+# Python
+__pycache__/
+*.pyc

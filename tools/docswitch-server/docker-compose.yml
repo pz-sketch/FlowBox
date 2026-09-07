@@ -1,0 +1,18 @@
+services:
+  docswitch:
+    build: .
+    image: docswitch:latest
+    container_name: docswitch
+    ports:
+      - "127.0.0.1:8002:8002"
+    environment:
+      DOCSWITCH_TMPDIR: /tmp/docswitch
+    tmpfs:
+      - /tmp/docswitch:mode=1777,size=1g
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8002/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
