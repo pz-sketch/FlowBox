@@ -584,8 +584,9 @@ final class ScreenRecorder: NSObject {
         panel.orderFront(nil)
         controlPanel = panel
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self else { return }
             Task { @MainActor in
-                guard let self, let start = self.startedAt else { return }
+                guard let start = self.startedAt else { return }
                 let sec = Int(Date().timeIntervalSince(start))
                 self.controlPanel?.updateTime(sec)
             }

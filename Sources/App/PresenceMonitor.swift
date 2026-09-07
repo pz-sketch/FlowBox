@@ -204,7 +204,8 @@ final class PresenceMonitor: NSObject {
         confirming = false
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.tick() }
+            guard let self else { return }
+            Task { @MainActor in self.tick() }
         }
         state = .watching(facePresent: true)
         FlowLog.general.info("人脸看守:已启动(宽限 \(Int(grace))s,空闲感应模式)")
