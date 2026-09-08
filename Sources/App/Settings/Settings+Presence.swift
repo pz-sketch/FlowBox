@@ -113,6 +113,27 @@ extension SettingsWindowController {
 
         inner.addArrangedSubview(separatorView())
 
+        presenceStrangerCheck = NSButton(checkboxWithTitle: L10n.tr("陌生人也锁屏(需先注册主人脸)", "Lock on unfamiliar faces (enroll owner first)"), target: self, action: #selector(togglePresenceStranger))
+        presenceStrangerCheck.setAccessibilityHelp(L10n.tr("开启后,摄像头看到人但不是主人脸也会锁屏。只认「是主人/不是主人」,不识别具体是谁,特征只存本机。", "When on, a face that doesn't match the owner also locks the screen. It only answers owner-or-not, never identifies who; the feature vector stays on your Mac."))
+        inner.addArrangedSubview(presenceStrangerCheck)
+
+        let strangerRow = NSStackView()
+        strangerRow.orientation = .horizontal
+        strangerRow.alignment = .centerY
+        strangerRow.spacing = 8
+        presenceEnrollButton = NSButton(title: L10n.tr("注册主人脸", "Enroll owner face"), target: self, action: #selector(enrollOwnerFace))
+        presenceEnrollButton.bezelStyle = .rounded
+        presenceEnrollButton.controlSize = .small
+        strangerRow.addArrangedSubview(presenceEnrollButton)
+        presenceOwnerStatusLabel = NSTextField(labelWithString: "")
+        presenceOwnerStatusLabel.font = .systemFont(ofSize: 11)
+        presenceOwnerStatusLabel.textColor = .secondaryLabelColor
+        presenceOwnerStatusLabel.lineBreakMode = .byWordWrapping
+        presenceOwnerStatusLabel.maximumNumberOfLines = 2
+        presenceOwnerStatusLabel.preferredMaxLayoutWidth = 360
+        strangerRow.addArrangedSubview(presenceOwnerStatusLabel)
+        inner.addArrangedSubview(strangerRow)
+
         presenceSaveCheck = NSButton(checkboxWithTitle: L10n.tr("锁屏前保存摄像头快照(排查误锁用)", "Save camera snapshot before locking (debug)"), target: self, action: #selector(togglePresenceSave))
         presenceSaveCheck.setAccessibilityHelp(L10n.tr("确认无人并即将锁屏时,把那刻画面存到本机 presence-cap 目录,方便核对当时是否真的没人。只留本机,可随时删除。", "When a lock is about to happen, save that frame to the local presence-cap folder to verify whether anyone was really there. Stays on your Mac; feel free to delete."))
         inner.addArrangedSubview(presenceSaveCheck)
@@ -156,6 +177,8 @@ extension SettingsWindowController {
         presenceGraceStepper.doubleValue = pc.gracePeriod
         presenceGraceValueLabel.stringValue = "\(Int(pc.gracePeriod))s"
         presenceSaveCheck.state = pc.saveCaptureOnLock ? .on : .off
+        presenceStrangerCheck.state = pc.strangerLockEnabled ? .on : .off
+        updateOwnerStatusLabel()
         updatePresenceControlsEnabled()
         refreshPresenceStatus()
     }
@@ -183,9 +206,14 @@ extension SettingsWindowController {
 
     func updatePresenceControlsEnabled() {
         let on = presenceCheck.state == .on
+        let enrolling = PresenceMonitor.shared.isEnrolling
         presenceLockStepper.isEnabled = on
         presenceConfirmStepper.isEnabled = on
         presenceGraceStepper.isEnabled = on
+        // 注册中锁定开关,避免中途改配置把看守状态机搞乱
+        presenceCheck.isEnabled = !enrolling
+        presenceStrangerCheck.isEnabled = !enrolling
+        presenceSaveCheck.isEnabled = !enrolling
     }
 
     func refreshPresenceStatus() {
@@ -261,5 +289,93 @@ extension SettingsWindowController {
     @objc func togglePresenceSave(_ sender: NSButton) {
         config.presence.saveCaptureOnLock = sender.state == .on
         save()
+    }
+
+    @objc func togglePresenceStranger(_ sender: NSButton) {
+        let on = sender.state == .on
+        if on {
+            // 开陌生人锁必须先有主人脸,否则开了也形同虚设
+            guard config.presence.ownerFaceprint != nil else {
+                sender.state = .off
+                presenceOwnerStatusLabel.stringValue = L10n.tr(
+                    "请先点「注册主人脸」,注册成功后再开此开关。",
+                    "Enroll your face first, then turn this on."
+                )
+                return
+            }
+            switch AVCaptureDevice.authorizationStatus(for: .video) {
+            case .denied, .restricted:
+                sender.state = .off
+                PermissionManager.openCameraSettings()
+                return
+            default:
+                break
+            }
+        }
+        config.presence.strangerLockEnabled = on
+        save()
+        updateOwnerStatusLabel()
+    }
+
+    @objc func enrollOwnerFace(_ sender: NSButton) {
+        guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
+            if AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined {
+                AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                    DispatchQueue.main.async { if granted { self?.enrollOwnerFace(sender) } }
+                }
+            } else {
+                PermissionManager.openCameraSettings()
+            }
+            return
+        }
+        presenceEnrollButton.isEnabled = false
+        presenceOwnerStatusLabel.stringValue = L10n.tr(
+            "请正脸看镜头,保持光线充足,采集中…",
+            "Look at the camera in good light, capturing…"
+        )
+        Task { @MainActor in
+            PresenceMonitor.shared.startEnroll(
+                progress: { [weak self] done, total in
+                    self?.presenceOwnerStatusLabel.stringValue = L10n.tr(
+                        "采集中 \(done)/\(total)…请正脸看镜头",
+                        "Capturing \(done)/\(total)… look at the camera"
+                    )
+                },
+                completion: { [weak self] ok in
+                    guard let self else { return }
+                    // 重读磁盘配置(注册结果由看守写入),再刷新界面
+                    self.config = AppConfig.load()
+                    self.presenceEnrollButton.isEnabled = true
+                    self.updateOwnerStatusLabel()
+                    self.updatePresenceControlsEnabled()
+                    self.refreshPresenceStatus()
+                    if ok, self.config.presence.strangerLockEnabled == false {
+                        // 注册成功但开关没开:提示可开,不擅自替用户打开
+                        self.presenceOwnerStatusLabel.stringValue += L10n.tr(
+                            "可打开「陌生人也锁屏」生效。",
+                            " You can now turn on stranger lock."
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    /// 主人脸注册状态行:未注册/已注册/注册中
+    func updateOwnerStatusLabel() {
+        let pc = config.presence
+        if pc.ownerFaceprint != nil {
+            presenceOwnerStatusLabel.stringValue = L10n.tr(
+                "✅ 主人脸已注册(特征仅存本机)。想换人/换环境请重新注册。",
+                "✅ Owner face enrolled (stays on this Mac). Re-enroll to change person or lighting."
+            )
+        } else if PresenceMonitor.shared.isEnrolling {
+            // 注册中由进度回调驱动文字,这里不动
+        } else {
+            presenceOwnerStatusLabel.stringValue = L10n.tr(
+                "未注册主人脸。陌生人锁需先注册,否则开了也不生效。",
+                "No owner face yet. Stranger lock needs enrollment first."
+            )
+        }
     }
 }

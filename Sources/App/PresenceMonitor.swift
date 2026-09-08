@@ -46,6 +46,7 @@ final class PresenceMonitor: NSObject {
         case waitingPermission
         case denied
         case watching(facePresent: Bool)
+        case enrolling
     }
 
     private(set) var state: WatchState = .off {
@@ -62,12 +63,34 @@ final class PresenceMonitor: NSObject {
     /// 摄像头当前是否打开(绿灯是否亮)
     var isCameraOn: Bool { session != nil }
 
+    /// 是否正在注册主人脸(锁保护的快照,供设置页等非隔离上下文读取;
+    /// 与 state == .enrolling 同义,但不经过 MainActor 隔离)
+    nonisolated var isEnrolling: Bool {
+        confirmLock.lock()
+        defer { confirmLock.unlock() }
+        return enrollSamples != nil
+    }
+
     private var session: AVCaptureSession?
     private var output: AVCaptureVideoDataOutput?
     private let captureQueue = DispatchQueue(label: "net.ai2048.flowbox.presence", qos: .utility)
     private let confirmLock = NSLock()
     /// 确认结果:nil=仍在确认; true=窗口内见过人脸(有人); false=窗口结束全无人(要锁)
     private nonisolated(unsafe) var confirmResult: Bool?
+    /// 见到人脸那一帧的主人脸相似度(nil=陌生人锁未开或未注册,无需比对)
+    private nonisolated(unsafe) var confirmOwnerScore: Double?
+    /// 注册模式:采集中(nil=不在注册);后台采集线程追加,主线程收尾
+    private nonisolated(unsafe) var enrollSamples: [[Float]]?
+    /// 注册目标样本数(后台只读)
+    private nonisolated(unsafe) var enrollTarget: Int = 8
+    /// 注册是否已在收尾(防采够与超时两路同时触发 finishEnroll)
+    private nonisolated(unsafe) var enrollFinishing = false
+    /// 注册截止时间(后台只读,超时自动失败,避免摄像头常开)
+    private nonisolated(unsafe) var enrollDeadline = Date.distantPast
+    /// 注册完成回调(仅主线程读写)
+    private var enrollCompletion: ((Bool) -> Void)?
+    /// 注册进度回调(仅主线程读写)
+    private var enrollProgressCallback: ((Int, Int) -> Void)?
     /// 摄像头刚启动头几帧还没曝光(全黑),跳过它们再做人脸检测
     private nonisolated(unsafe) var warmupFramesRemaining: Int = 6
     /// 确认窗口内最近一帧(曝光稳定后),锁屏时存作快照
@@ -130,6 +153,7 @@ final class PresenceMonitor: NSObject {
     func start(grace: Double = 15) {
         if case .watching = state { return }
         if state == .waitingPermission { return }
+        if state == .enrolling { return }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .notDetermined:
             state = .waitingPermission
@@ -162,10 +186,127 @@ final class PresenceMonitor: NSObject {
         closeCamera()
         confirming = false
         wasAbsent = false
+        cancelEnroll()
         if state != .off {
             state = .off
             FlowLog.general.info("人脸看守:已停止")
         }
+    }
+
+    // MARK: - 主人脸注册(纯本地,特征向量只存配置文件)
+
+    /// 开始注册:打开摄像头采集多帧人脸特征取平均存为"主人"。
+    /// 注册期间暂停空闲看守计时,完成后自动恢复。progress(已采,目标),completion(成功)。
+    func startEnroll(progress: @escaping (Int, Int) -> Void, completion: @escaping (Bool) -> Void) {
+        guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
+            completion(false)
+            return
+        }
+        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .unspecified)
+                ?? AVCaptureDevice.default(for: .video),
+              let input = try? AVCaptureDeviceInput(device: device) else {
+            completion(false)
+            return
+        }
+        cancelEnroll(restart: false)
+        let session = AVCaptureSession()
+        session.beginConfiguration()
+        session.sessionPreset = .low
+        if session.canAddInput(input) { session.addInput(input) }
+        let output = AVCaptureVideoDataOutput()
+        output.alwaysDiscardsLateVideoFrames = true
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        output.setSampleBufferDelegate(self, queue: captureQueue)
+        if session.canAddOutput(output) { session.addOutput(output) }
+        session.commitConfiguration()
+        self.session = session
+        self.output = output
+        confirmLock.lock()
+        enrollSamples = []
+        enrollTarget = 8
+        enrollFinishing = false
+        enrollDeadline = Date().addingTimeInterval(20)
+        // 注册接管摄像头:丢弃可能正在进行的空闲确认,避免两套结论打架
+        confirming = false
+        confirmResult = nil
+        confirmOwnerScore = nil
+        confirmLock.unlock()
+        enrollProgressCallback = progress
+        enrollCompletion = completion
+        state = .enrolling
+        progress(0, 8)
+        let sess = session
+        captureQueue.async { sess.startRunning() }
+        FlowLog.general.info("人脸看守:开始注册主人脸")
+        // 超时兜底:主线程轮询,超时仍没采够则失败收尾(摄像头不会常开)
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] t in
+            guard let self else { t.invalidate(); return }
+            Task { @MainActor in
+                guard self.state == .enrolling else { t.invalidate(); return }
+                self.confirmLock.lock()
+                let finishing = self.enrollFinishing
+                let timedOut = Date() > self.enrollDeadline
+                let count = self.enrollSamples?.count ?? 0
+                if timedOut, !finishing { self.enrollFinishing = true }
+                self.confirmLock.unlock()
+                if finishing {
+                    // 采集侧已触发收尾,本轮询只停表
+                    t.invalidate()
+                } else if timedOut {
+                    t.invalidate()
+                    self.finishEnroll(success: false)
+                } else {
+                    // 顺手推进度(采集回调在后台线程,不直接碰主线程回调)
+                    self.enrollProgressCallback?(count, self.enrollTarget)
+                }
+            }
+        }
+    }
+
+    /// 取消注册(用户关开关/重进/退出时调用);restart=true 时恢复空闲看守
+    func cancelEnroll(restart: Bool = true) {
+        confirmLock.lock()
+        let enrolling = enrollSamples != nil
+        enrollSamples = nil
+        confirmLock.unlock()
+        enrollCompletion = nil
+        enrollProgressCallback = nil
+        if enrolling {
+            closeCamera()
+            FlowLog.general.info("人脸看守:注册已取消")
+            if restart, state == .enrolling {
+                // 先离注册态,否则 refresh()->start() 会因 enrolling 直接返回
+                state = .off
+                refresh()
+            }
+        }
+    }
+
+    /// 注册收尾(主线程):样本取平均存配置,恢复看守
+    private func finishEnroll(success: Bool) {
+        confirmLock.lock()
+        let samples = enrollSamples ?? []
+        enrollSamples = nil
+        confirmLock.unlock()
+        let completion = enrollCompletion
+        enrollCompletion = nil
+        enrollProgressCallback = nil
+        let mean = success ? Faceprint.average(samples) : nil
+        if let mean {
+            var cfg = AppConfig.load()
+            cfg.presence.ownerFaceprint = mean
+            cfg.write()
+            presenceDebugLog("注册主人脸成功: \(samples.count) 帧,向量 \(mean.count) 维")
+            FlowLog.general.info("人脸看守:主人脸注册成功")
+        } else {
+            presenceDebugLog("注册主人脸失败:有效样本 \(samples.count)")
+            FlowLog.general.info("人脸看守:主人脸注册失败(没拍到足够清晰的人脸)")
+        }
+        closeCamera()
+        // 先离注册态,否则 refresh()->start() 因 enrolling 直接返回,看守停住
+        state = .off
+        refresh()
+        completion?(mean != nil)
     }
 
     /// 人类可读状态(设置页/菜单展示)
@@ -177,6 +318,8 @@ final class PresenceMonitor: NSObject {
             return L10n.tr("等待摄像头授权…", "Waiting for camera access…")
         case .denied:
             return L10n.tr("⚠️ 无摄像头权限,请在系统设置中允许", "⚠️ No camera access — allow in System Settings")
+        case .enrolling:
+            return L10n.tr("📷 正在注册主人脸:请正脸看镜头,保持光线充足…", "📷 Enrolling owner face: look at the camera in good light…")
         case .watching(let face):
             if screenLocked {
                 return L10n.tr("💤 已锁屏,看守休眠中", "💤 Screen locked, watch asleep")
@@ -318,6 +461,7 @@ final class PresenceMonitor: NSObject {
         self.output = output
         confirmLock.lock()
         confirmResult = nil
+        confirmOwnerScore = nil
         warmupFramesRemaining = 6
         latestFrame = nil
         confirmLock.unlock()
@@ -330,9 +474,23 @@ final class PresenceMonitor: NSObject {
 
     private func finishConfirm(seen: Bool) {
         presenceDebugLog("finishConfirm: seen=\(seen)")
+        confirmLock.lock()
+        let ownerScore = confirmOwnerScore
+        confirmLock.unlock()
         closeCamera()
         confirming = false
         if seen {
+            // 陌生人锁:开着且已注册主人脸,但相似度不够 → 视为陌生人,直接锁
+            let cfg = AppConfig.load().presence
+            if cfg.strangerLockEnabled, cfg.ownerFaceprint != nil, let score = ownerScore {
+                if score < cfg.ownerMatchThreshold {
+                    presenceDebugLog("陌生人锁:相似度 \(String(format: "%.2f", score)) < 阈值 \(cfg.ownerMatchThreshold) → lockNow")
+                    FlowLog.general.info("人脸看守:检测到非主人脸,锁屏")
+                    lockNow(reason: "陌生人脸自动锁屏")
+                    return
+                }
+                presenceDebugLog("陌生人锁:相似度 \(String(format: "%.2f", score)) ≥ 阈值,通过")
+            }
             // 确认有人:重置锚点,再等一个周期才复查;这里不播提示音,
             // 避免「人一直在但一直没操作」的周期性复查每次叮一声
             lastActivity = Date()
@@ -353,14 +511,14 @@ final class PresenceMonitor: NSObject {
         output = nil
     }
 
-    private func lockNow() {
+    private func lockNow(reason: String = "人脸离开自动锁屏") {
         let now = Date()
         let cooldownRemaining = Int(30 - now.timeIntervalSince(lastAutoLock))
         presenceDebugLog("lockNow: 距上次锁屏 \(Int(now.timeIntervalSince(lastAutoLock)))s (冷却30s) → \(cooldownRemaining > 0 ? "冷却中,不锁" : "执行锁屏")")
         // 锁后冷却 30 秒,避免重复触发
         if now.timeIntervalSince(lastAutoLock) >= 30 {
             lastAutoLock = now
-            SystemLocker.lock(reason: "人脸离开自动锁屏")
+            SystemLocker.lock(reason: reason)
         }
         lastActivity = now
         confirming = false
@@ -370,9 +528,12 @@ final class PresenceMonitor: NSObject {
     // MARK: - 锁屏/解锁通知
 
     @objc private func screenDidLock() {
-        // 锁屏后看守休眠:关摄像头、停确认、停计时,绿灯不再亮
+        // 锁屏后看守休眠:关摄像头、停确认、停计时,绿灯不再亮;
+        // 注册中也被取消(陌生人锁屏后不能留着半截注册态)
         screenLocked = true
         confirming = false
+        cancelEnroll(restart: false)
+        if state == .enrolling { state = .off }
         closeCamera()
         FlowLog.general.info("人脸看守:已锁屏,休眠")
     }
@@ -403,8 +564,11 @@ final class PresenceMonitor: NSObject {
     }
 
     @objc private func sessionResignedActive() {
-        // 锁屏/切换用户时暂停计时,回来后重新宽限(由 becameActive 处理)
+        // 锁屏/切换用户时暂停计时,回来后重新宽限(由 becameActive 处理);
+        // 注册中同样取消,避免切用户后摄像头还开着
         confirming = false
+        cancelEnroll(restart: false)
+        if state == .enrolling { state = .off }
         closeCamera()
         graceUntil = .distantFuture
     }
@@ -420,33 +584,113 @@ extension PresenceMonitor: AVCaptureVideoDataOutputSampleBufferDelegate {
     ) {
         // 确认窗口内的每一帧都做检测:任一人脸即判有人(避免头几帧未曝光导致的误判)
         confirmLock.lock()
+        let enrolling = enrollSamples != nil
         let settled = confirmResult != nil
         var warmup = 0
-        if !settled {
+        if enrolling || !settled {
             if warmupFramesRemaining > 0 {
                 warmupFramesRemaining -= 1
                 warmup = 1
             }
         }
         confirmLock.unlock()
-        // 已出结论(有人/锁屏)则忽略后续帧;预热帧不检测只丢弃
-        guard !settled else { return }
+        // 看守模式已出结论则忽略后续帧;注册模式持续采集直到采够;预热帧不检测只丢弃
+        if !enrolling, settled { return }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         if warmup == 1 { return }
         let request = VNDetectFaceRectanglesRequest()
         let handler = VNSequenceRequestHandler()
-        var seen = false
+        var faces: [VNFaceObservation] = []
         if (try? handler.perform([request], on: pixelBuffer)) != nil {
-            seen = !(request.results?.isEmpty ?? true)
+            faces = request.results ?? []
         }
+        let seen = !faces.isEmpty
         // 曝光稳定帧缓存为快照候选,锁屏时写入
         confirmLock.lock()
         latestFrame = pixelBuffer
-        if seen { confirmResult = true }
         confirmLock.unlock()
-        if seen {
-            presenceDebugLog("captureOutput: 检测到人脸 → confirmResult=true")
+        if enrolling {
+            // 注册:取最大人脸提特征攒样本;够数后主线程收尾(超时由注册定时器兜底)
+            guard seen, let box = Self.largestFace(faces),
+                  let fp = Self.faceFeaturePrint(pixelBuffer, faceBox: box) else { return }
+            confirmLock.lock()
+            enrollSamples?.append(fp)
+            let n = enrollSamples?.count ?? 0
+            let t = enrollTarget
+            // 置收尾标记,超时轮询见到标记就只停表不再收尾
+            let shouldFinish = n >= t && !enrollFinishing
+            if shouldFinish { enrollFinishing = true }
+            confirmLock.unlock()
+            if shouldFinish {
+                Task { @MainActor in PresenceMonitor.shared.finishEnroll(success: true) }
+            }
+            return
         }
+        if seen {
+            confirmLock.lock()
+            confirmResult = true
+            confirmLock.unlock()
+            presenceDebugLog("captureOutput: 检测到人脸 → confirmResult=true")
+            // 陌生人锁:只在首个见人帧算一次相似度,存下来给主线程收尾用
+            let pcfg = AppConfig.load().presence
+            if pcfg.strangerLockEnabled, let owner = pcfg.ownerFaceprint,
+               let box = Self.largestFace(faces),
+               let fp = Self.faceFeaturePrint(pixelBuffer, faceBox: box) {
+                let score = Faceprint.cosineSimilarity(owner, fp)
+                confirmLock.lock()
+                if confirmOwnerScore == nil { confirmOwnerScore = score }
+                confirmLock.unlock()
+                presenceDebugLog("陌生人比对:相似度 \(String(format: "%.2f", score))")
+            }
+        }
+    }
+
+    /// 多张脸时取面积最大的框(离镜头最近、最可能是正主)
+    private nonisolated static func largestFace(_ faces: [VNFaceObservation]) -> VNFaceObservation? {
+        faces.max { $0.boundingBox.width * $0.boundingBox.height < $1.boundingBox.width * $1.boundingBox.height }
+    }
+
+    /// 人脸区域提 Vision 特征向量:按归一化框裁出人脸小图,再算 featureprint。
+    /// nil=提失败(框太小/无特征),调用方跳过该帧即可。
+    private nonisolated static func faceFeaturePrint(
+        _ pixelBuffer: CVPixelBuffer,
+        faceBox: VNFaceObservation
+    ) -> [Float]? {
+        let box = faceBox.boundingBox
+        // 框太小(远景/误检)不提,避免垃圾特征污染注册与比对
+        guard box.width >= 0.08, box.height >= 0.08 else { return nil }
+        let w = CVPixelBufferGetWidth(pixelBuffer)
+        let h = CVPixelBufferGetHeight(pixelBuffer)
+        // Vision 归一化框(左下原点)转像素框(左上原点,与 CGImage 一致),
+        // 外扩 15% 含下巴与发际,并钳制在画面内
+        var rect = CGRect(
+            x: box.minX * CGFloat(w),
+            y: (1.0 - box.maxY) * CGFloat(h),
+            width: box.width * CGFloat(w),
+            height: box.height * CGFloat(h)
+        )
+        rect = rect.insetBy(dx: -rect.width * 0.15, dy: -rect.height * 0.15)
+            .intersection(CGRect(x: 0, y: 0, width: w, height: h))
+        guard !rect.isNull, rect.width >= 40, rect.height >= 40 else { return nil }
+        let full = CIImage(cvPixelBuffer: pixelBuffer)
+        guard let fullCG = CIContext().createCGImage(full, from: full.extent),
+              let faceCG = fullCG.cropping(to: rect.integral) else { return nil }
+        let request = VNGenerateImageFeaturePrintRequest()
+        let handler = VNSequenceRequestHandler()
+        guard (try? handler.perform([request], on: faceCG)) != nil,
+              let obs = request.results?.first else { return nil }
+        var floats: [Float] = []
+        floats.reserveCapacity(obs.elementCount)
+        let ok = obs.data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Bool in
+            guard let base = raw.baseAddress, raw.count >= obs.elementCount * MemoryLayout<Float>.size else {
+                return false
+            }
+            let ptr = base.assumingMemoryBound(to: Float.self)
+            floats.append(contentsOf: UnsafeBufferPointer(start: ptr, count: obs.elementCount))
+            return true
+        }
+        guard ok, !floats.isEmpty else { return nil }
+        return floats
     }
 
     /// 把无人判定帧存到本机磁盘(仅当配置开启);后台执行,不阻塞锁屏

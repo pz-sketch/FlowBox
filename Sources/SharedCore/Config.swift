@@ -220,11 +220,18 @@ public struct PresenceConfig: Codable, Equatable {
     public var gracePeriod: Double = 15
     /// 确认无人、即将锁屏时,把那一刻摄像头快照存到本地(排查误锁用);画面仅留本机
     public var saveCaptureOnLock = true
+    /// 陌生人锁屏:确认时有人但不是主人脸,也锁屏(默认关)
+    public var strangerLockEnabled = false
+    /// 主人脸特征向量(注册时存,比对只在本机做;nil=未注册)
+    public var ownerFaceprint: [Float]?
+    /// 主人脸判定阈值:相似度低于此值视为陌生人(0~1,默认 0.6)
+    public var ownerMatchThreshold: Double = 0.6
 
     public init() {}
 
     enum CodingKeys: String, CodingKey {
         case enabled, lockAfterSeconds, confirmAfterSeconds, gracePeriod, saveCaptureOnLock
+        case strangerLockEnabled, ownerFaceprint, ownerMatchThreshold
     }
 
     public init(from decoder: Decoder) throws {
@@ -234,6 +241,9 @@ public struct PresenceConfig: Codable, Equatable {
         confirmAfterSeconds = try c.decodeIfPresent(Double.self, forKey: .confirmAfterSeconds) ?? 60
         gracePeriod = try c.decodeIfPresent(Double.self, forKey: .gracePeriod) ?? 15
         saveCaptureOnLock = try c.decodeIfPresent(Bool.self, forKey: .saveCaptureOnLock) ?? true
+        strangerLockEnabled = try c.decodeIfPresent(Bool.self, forKey: .strangerLockEnabled) ?? false
+        ownerFaceprint = try c.decodeIfPresent([Float].self, forKey: .ownerFaceprint)
+        ownerMatchThreshold = try c.decodeIfPresent(Double.self, forKey: .ownerMatchThreshold) ?? 0.6
     }
 }
 

@@ -58,6 +58,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var presenceGraceStepper: NSStepper!
     var presenceGraceValueLabel: NSTextField!
     var presenceSaveCheck: NSButton!
+    var presenceStrangerCheck: NSButton!
+    var presenceEnrollButton: NSButton!
+    var presenceOwnerStatusLabel: NSTextField!
 
     /// 正在编辑的配置(每次打开窗口时从磁盘重读)
     var config = AppConfig.load()
@@ -85,6 +88,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
         UserDefaults.standard.set(NSStringFromRect(window.frame), forKey: "settingsWindowFrame")
+        // 关窗时若正在注册主人脸,取消并恢复看守,避免摄像头常开、控件锁死
+        Task { @MainActor in PresenceMonitor.shared.cancelEnroll() }
     }
 
     // MARK: - 界面构建

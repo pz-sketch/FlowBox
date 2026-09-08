@@ -46,7 +46,7 @@ It is built with Swift and Apple-native frameworks rather than Electron. It is d
 | **Camera PiP** | Preview before recording; drag it into position and configure circle/rectangle shape, size, mirroring, and position persistence. |
 | **Mouse wheel controls** | Reverse external mouse wheel direction and smooth discrete wheel events while leaving trackpad events unchanged. |
 | **Menu bar hider** | Put status icons pushed out by a notch or limited space into an expandable overflow menu. |
-| **Quick actions** | Lock the screen, auto-lock when your face leaves (on-device only), remove quarantine attributes from dropped files, and create files from configurable templates. |
+| **Quick actions** | Lock the screen, auto-lock when your face leaves or a stranger appears (on-device only, owner face enrolled locally), remove quarantine attributes from dropped files, and create files from configurable templates. |
 
 ### Hotkeys and workflow
 
@@ -120,6 +120,7 @@ FlowBox requests macOS permissions by feature; you do not need to grant every pe
 | Microphone input | Microphone. |
 | Camera PiP | Camera. |
 | Face-away auto-lock | Camera (frames stay in memory for on-device face-rectangle detection; never saved or uploaded). |
+| Stranger lock (optional) | Camera. Compares faces against a locally enrolled owner feature vector stored in your config; answers owner-or-not only, never identifies who. |
 | Wheel reversal / smooth scrolling | Accessibility; some system configurations may also require Input Monitoring. |
 | Menu bar hider | Screen Recording to resolve status-item names and icons. |
 | Lock screen / quarantine removal | Apple Events or administrator authorization may be requested, depending on the system and action path. |
@@ -220,7 +221,7 @@ FlowBox 把一组高频 macOS 操作放进一个轻量菜单栏应用：Finder �
 | **摄像头画中画** | 录制前即可预览；支持拖动、圆形/矩形、尺寸、镜像和位置记忆。 |
 | **鼠标滚轮增强** | 反转外接鼠标滚轮方向，并将离散滚轮事件转换为更连续的滚动；触控板事件保持不变。 |
 | **菜单栏收纳** | 将被刘海或空间限制挤出的状态图标放入可展开的收纳菜单。 |
-| **快捷操作** | 一键锁屏、人脸离开自动锁屏(纯本地检测)、拖入文件去除 quarantine 属性，以及可配置的新建文件模板。 |
+| **快捷操作** | 一键锁屏、人脸离开自动锁屏 / 陌生人脸锁屏(纯本地检测,主人脸需先在设置里注册)、拖入文件去除 quarantine 属性，以及可配置的新建文件模板。 |
 
 ### 快捷键与使用方式
 
@@ -294,6 +295,7 @@ FlowBox 按功能请求 macOS 权限，不同功能不需要全部授权：
 | 麦克风画面 | 麦克风。 |
 | 摄像头画中画 | 摄像头。 |
 | 人脸离开自动锁屏 | 摄像头(画面只进内存做本地人脸矩形检测,不保存不上传)。 |
+| 陌生人脸锁屏(可选) | 摄像头。与本机配置里注册的主人脸特征向量比对,只回答"是主人/不是主人",不识别具体是谁。 |
 | 滚轮反转 / 流畅滚动 | 辅助功能；部分系统配置可能还需要输入监控。 |
 | 菜单栏收纳 | 屏幕录制，用于读取状态项名称和图标。 |
 | 一键锁屏 / 去除隔离属性 | 可能触发 Apple Events 或管理员授权，取决于系统环境和操作路径。 |

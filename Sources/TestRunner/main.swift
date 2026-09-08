@@ -43,6 +43,9 @@ do {
     checkNear(cfg.presence.confirmAfterSeconds, 60, "default confirmAfter 60s")
     checkNear(cfg.presence.gracePeriod, 15, "default grace 15s")
     check(cfg.presence.saveCaptureOnLock==true, "default saveCaptureOnLock true")
+    check(cfg.presence.strangerLockEnabled==false, "default strangerLock off")
+    check(cfg.presence.ownerFaceprint==nil, "default ownerFaceprint nil")
+    checkNear(cfg.presence.ownerMatchThreshold, 0.6, "default ownerThreshold 0.6")
 }
 do {
     var cfg=AppConfig.defaultConfig(); cfg.menu.copyFolder=false; cfg.scroll.smoothScrolling=true; cfg.scroll.minStep=120; cfg.screenshot.penColorHex="#00FF00"; cfg.recording.captureCamera=true; cfg.recording.cameraWidth=260
@@ -51,13 +54,27 @@ do {
     check(dec.screenshot.penColorHex=="#00FF00", "roundtrip penColor")
     check(dec.recording.captureCamera==true, "roundtrip camera")
     check(dec.recording.cameraWidth==260, "roundtrip cameraWidth")
-    var pcfg=AppConfig.defaultConfig(); pcfg.presence.enabled=true; pcfg.presence.lockAfterSeconds=12; pcfg.presence.confirmAfterSeconds=90; pcfg.presence.gracePeriod=20; pcfg.presence.saveCaptureOnLock=false
+    var pcfg=AppConfig.defaultConfig(); pcfg.presence.enabled=true; pcfg.presence.lockAfterSeconds=12; pcfg.presence.confirmAfterSeconds=90; pcfg.presence.gracePeriod=20; pcfg.presence.saveCaptureOnLock=false; pcfg.presence.strangerLockEnabled=true; pcfg.presence.ownerFaceprint=[0.1, 0.2, 0.3]; pcfg.presence.ownerMatchThreshold=0.7
     let pdata=try! JSONEncoder().encode(pcfg); let pdec=try! JSONDecoder().decode(AppConfig.self, from:pdata)
     check(pdec.presence.enabled==true, "roundtrip presence on")
     checkNear(pdec.presence.lockAfterSeconds, 12, "roundtrip lockAfter 12s")
     checkNear(pdec.presence.confirmAfterSeconds, 90, "roundtrip confirmAfter 90s")
     checkNear(pdec.presence.gracePeriod, 20, "roundtrip grace 20s")
     check(pdec.presence.saveCaptureOnLock==false, "roundtrip saveCaptureOnLock off")
+    check(pdec.presence.strangerLockEnabled==true, "roundtrip strangerLock on")
+    check(pdec.presence.ownerFaceprint==[0.1, 0.2, 0.3], "roundtrip ownerFaceprint")
+    checkNear(pdec.presence.ownerMatchThreshold, 0.7, "roundtrip ownerThreshold 0.7")
+}
+do {
+// Faceprint 纯数值比对(余弦相似度 + 多帧平均),不依赖摄像头
+    checkNear(Faceprint.cosineSimilarity([1, 0, 0], [1, 0, 0]), 1, "cosine identical 1")
+    checkNear(Faceprint.cosineSimilarity([1, 0], [-1, 0]), -1, "cosine opposite -1")
+    checkNear(Faceprint.cosineSimilarity([1, 0], [0, 1]), 0, "cosine orthogonal 0")
+    check(Faceprint.cosineSimilarity([], [])==0, "cosine empty 0")
+    check(Faceprint.cosineSimilarity([1, 2], [1])==0, "cosine dim mismatch 0")
+    check(Faceprint.average([])==nil, "average empty nil")
+    let m=Faceprint.average([[1, 2], [3, 4]])
+    check(m != nil && abs((m?[0] ?? 0)-2)<0.01 && abs((m?[1] ?? 0)-3)<0.01, "average mean")
 }
 do {
     let json=#"{"menu":{"copyFolder":true},"scroll":{}}"#.data(using:.utf8)!

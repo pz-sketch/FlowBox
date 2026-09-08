@@ -18,6 +18,9 @@ struct ConfigTests {
         #expect(abs(cfg.presence.confirmAfterSeconds - 60) < 0.01)
         #expect(abs(cfg.presence.gracePeriod - 15) < 0.01)
         #expect(cfg.presence.saveCaptureOnLock == true)
+        #expect(cfg.presence.strangerLockEnabled == false)
+        #expect(cfg.presence.ownerFaceprint == nil)
+        #expect(abs(cfg.presence.ownerMatchThreshold - 0.6) < 0.01)
     }
 
     @Test
@@ -34,6 +37,9 @@ struct ConfigTests {
         cfg.presence.confirmAfterSeconds = 90
         cfg.presence.gracePeriod = 20
         cfg.presence.saveCaptureOnLock = false
+        cfg.presence.strangerLockEnabled = true
+        cfg.presence.ownerFaceprint = [0.1, 0.2, 0.3]
+        cfg.presence.ownerMatchThreshold = 0.7
         let data = try JSONEncoder().encode(cfg)
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
         #expect(decoded.scroll.minStep == 120)
@@ -45,6 +51,9 @@ struct ConfigTests {
         #expect(abs(decoded.presence.confirmAfterSeconds - 90) < 0.01)
         #expect(abs(decoded.presence.gracePeriod - 20) < 0.01)
         #expect(decoded.presence.saveCaptureOnLock == false)
+        #expect(decoded.presence.strangerLockEnabled == true)
+        #expect(decoded.presence.ownerFaceprint == [0.1, 0.2, 0.3])
+        #expect(abs(decoded.presence.ownerMatchThreshold - 0.7) < 0.01)
     }
 
     @Test
