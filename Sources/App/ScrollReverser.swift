@@ -103,8 +103,8 @@ final class ScrollReverser {
 
         eventTap = tap
         thread = Thread { [weak self, tap] in
-            guard let self = self else { return }
-            let mode = CFRunLoopMode.commonModes.rawValue
+            // 保留原语义:实例已释放就不启动事件循环;用布尔测试避免未使用绑定的警告
+            guard self != nil else { return }
             guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
                 return
             }

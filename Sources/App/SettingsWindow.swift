@@ -103,102 +103,65 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private func buildWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: UIStyle.windowWidth, height: UIStyle.windowHeight),
+            contentRect: NSRect(x: 0, y: 0, width: UIStyle.Metrics.windowWidth, height: UIStyle.Metrics.windowHeight),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.title = "FlowBox"
-        window.subtitle = L10n.tr("设置", "Settings")
-        window.titleVisibility = .hidden
-        window.titlebarAppearsTransparent = true
-        if #available(macOS 13.0, *) { window.toolbarStyle = .unifiedCompact }
-        window.backgroundColor = UIStyle.windowBackground
-        window.minSize = NSSize(width: UIStyle.minimumWindowWidth, height: UIStyle.minimumWindowHeight)
-        window.isReleasedWhenClosed = false
+        UIStyle.applyWindowChrome(window, subtitle: L10n.tr("设置", "Settings"))
+        window.minSize = NSSize(width: UIStyle.Metrics.minimumWindowWidth, height: UIStyle.Metrics.minimumWindowHeight)
         window.delegate = self
         if let savedFrame = UserDefaults.standard.string(forKey: "settingsWindowFrame") {
             window.setFrame(NSRectFromString(savedFrame), display: false)
         } else {
             window.center()
         }
-        window.contentView?.wantsLayer = true
 
         guard let content = window.contentView else { return }
+        UIStyle.attachHUDMaterial(to: content)
 
-        let bgView = NSVisualEffectView()
-        bgView.material = .hudWindow
-        bgView.blendingMode = .behindWindow
-        bgView.state = .active
-        bgView.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(bgView)
-        NSLayoutConstraint.activate([
-            bgView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            bgView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            bgView.topAnchor.constraint(equalTo: content.topAnchor),
-            bgView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-        ])
-
-        let root = NSStackView()
-        root.orientation = .vertical
-        root.alignment = .leading
-        root.spacing = 14
-        root.translatesAutoresizingMaskIntoConstraints = false
+        let root = UIStyle.vStack(spacing: UIStyle.Metrics.sp14)
         content.addSubview(root)
         NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: UIStyle.outerPadding),
-            root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -UIStyle.outerPadding),
-            root.topAnchor.constraint(equalTo: content.topAnchor, constant: 18),
-            root.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
+            root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: UIStyle.Metrics.windowPadding),
+            root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -UIStyle.Metrics.windowPadding),
+            root.topAnchor.constraint(equalTo: content.topAnchor, constant: UIStyle.Metrics.windowTopInset),
+            root.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -UIStyle.Metrics.sp12),
         ])
 
-        let header = NSStackView()
-        header.orientation = .horizontal
-        header.alignment = .centerY
-        header.spacing = 10
+        let header = UIStyle.hStack(spacing: UIStyle.Metrics.sp10)
         let icon = NSImageView()
         if let appIcon = NSApp.applicationIconImage {
             icon.image = appIcon
         } else if let img = NSImage(systemSymbolName: "sparkles.rectangle.stack", accessibilityDescription: nil) {
             icon.image = img
-            icon.contentTintColor = NSColor.controlAccentColor
+            icon.contentTintColor = UIStyle.Palette.accent
             icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 22, weight: .regular)
         }
         icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.widthAnchor.constraint(equalToConstant: 28).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        icon.widthAnchor.constraint(equalToConstant: UIStyle.Metrics.chipSize).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: UIStyle.Metrics.chipSize).isActive = true
         icon.wantsLayer = true
-        icon.layer?.cornerRadius = 7
+        icon.layer?.cornerRadius = UIStyle.Metrics.radiusM
         icon.layer?.masksToBounds = true
         header.addArrangedSubview(icon)
 
-        let titleStack = NSStackView()
-        titleStack.orientation = .vertical
-        titleStack.spacing = 1
-        let titleLabel = NSTextField(labelWithString: "FlowBox")
-        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        titleLabel.textColor = .labelColor
-        titleStack.addArrangedSubview(titleLabel)
-        let subLabel = NSTextField(labelWithString: L10n.tr("轻量 · 高效 · 不打扰  —  Finder 增强 / 截图 / 录屏 / 去隔离", "Lightweight · Efficient · Unobtrusive — Finder / Screenshot / Recording / Quarantine"))
-        subLabel.font = .systemFont(ofSize: 10.5, weight: .regular)
-        subLabel.textColor = NSColor.secondaryLabelColor
-        titleStack.addArrangedSubview(subLabel)
+        let titleStack = UIStyle.vStack(spacing: 1)
+        titleStack.addArrangedSubview(UIStyle.label("FlowBox", font: UIStyle.Text.display(), color: UIStyle.Palette.text))
+        titleStack.addArrangedSubview(UIStyle.label(
+            L10n.tr("轻量 · 高效 · 不打扰  —  Finder 增强 / 截图 / 录屏 / 去隔离", "Lightweight · Efficient · Unobtrusive — Finder / Screenshot / Recording / Quarantine"),
+            font: UIStyle.Text.micro(), color: UIStyle.Palette.textSecondary))
         header.addArrangedSubview(titleStack)
-        header.addArrangedSubview(NSView())
-        let badge = NSTextField(labelWithString: "v1.0")
-        badge.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
-        badge.textColor = NSColor.tertiaryLabelColor
-        badge.wantsLayer = true
-        badge.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.08).cgColor
-        badge.layer?.cornerRadius = 6
-        badge.drawsBackground = false
-        header.addArrangedSubview(badge)
+        header.addArrangedSubview(UIStyle.spacer())
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+        header.addArrangedSubview(UIStyle.pill("v" + version, font: UIStyle.Text.mono(10), color: UIStyle.Palette.textTertiary))
         root.addArrangedSubview(header)
-        header.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        UIStyle.fillWidth(header, in: root)
 
         let seg = NSSegmentedControl(labels: [L10n.tr("菜单", "Menu"), L10n.tr("鼠标", "Mouse"), L10n.tr("模板", "Templates"), L10n.tr("截图", "Screenshot"), L10n.tr("录屏", "Recording"), L10n.tr("人脸", "Presence"), L10n.tr("关于", "About")], trackingMode: .selectOne, target: self, action: #selector(segmentedChanged))
         seg.selectedSegment = 0
-        seg.segmentStyle = .texturedRounded
+        seg.segmentStyle = .rounded
         seg.controlSize = .regular
         if #available(macOS 13.0, *) { seg.segmentDistribution = .fillEqually }
         // 为每段配 SF Symbol，让导航更直觉、更轻
@@ -211,7 +174,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         }
         seg.translatesAutoresizingMaskIntoConstraints = false
         root.addArrangedSubview(seg)
-        seg.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        UIStyle.fillWidth(seg, in: root)
         segmented = seg
 
         tabView = NSTabView()
@@ -220,7 +183,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         tabView.translatesAutoresizingMaskIntoConstraints = false
         tabView.wantsLayer = true
         root.addArrangedSubview(tabView)
-        tabView.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        UIStyle.fillWidth(tabView, in: root)
         tabView.heightAnchor.constraint(greaterThanOrEqualToConstant: 408).isActive = true
 
         buildMenuTab(tabView: tabView)
@@ -234,31 +197,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
         let footerSep = separatorView()
         root.addArrangedSubview(footerSep)
-        footerSep.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        UIStyle.fillWidth(footerSep, in: root)
 
-        let footer = NSStackView()
-        footer.orientation = .horizontal
-        footer.alignment = .centerY
-        footer.spacing = 6
-        let dot = NSView()
-        dot.wantsLayer = true
-        dot.layer?.backgroundColor = NSColor.systemGreen.withAlphaComponent(0.85).cgColor
-        dot.layer?.cornerRadius = 3
-        dot.translatesAutoresizingMaskIntoConstraints = false
-        dot.widthAnchor.constraint(equalToConstant: 6).isActive = true
-        dot.heightAnchor.constraint(equalToConstant: 6).isActive = true
-        footer.addArrangedSubview(dot)
-        let hint = NSTextField(labelWithString: L10n.tr("改动即时生效 · 自动同步到配置文件", "Changes apply instantly · Auto-synced to config file"))
-        hint.font = .systemFont(ofSize: 10.5, weight: .regular)
-        hint.textColor = NSColor.secondaryLabelColor
-        footer.addArrangedSubview(hint)
-        footer.addArrangedSubview(NSView())
-        let tip = NSTextField(labelWithString: L10n.tr("⌘ ,  快速打开", "⌘ ,  to open quickly"))
-        tip.font = .systemFont(ofSize: 10, weight: .regular)
-        tip.textColor = NSColor.tertiaryLabelColor
-        footer.addArrangedSubview(tip)
+        let footer = UIStyle.hStack(spacing: UIStyle.Metrics.sp6)
+        footer.addArrangedSubview(UIStyle.statusDot(UIStyle.Palette.success.withAlphaComponent(0.9)))
+        footer.addArrangedSubview(UIStyle.label(
+            L10n.tr("改动即时生效 · 自动同步到配置文件", "Changes apply instantly · Auto-synced to config file"),
+            font: UIStyle.Text.micro(), color: UIStyle.Palette.textSecondary))
+        footer.addArrangedSubview(UIStyle.spacer())
+        footer.addArrangedSubview(UIStyle.label(
+            L10n.tr("⌘ ,  快速打开", "⌘ ,  to open quickly"),
+            font: UIStyle.Text.footnote(), color: UIStyle.Palette.textTertiary))
         root.addArrangedSubview(footer)
-        footer.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        UIStyle.fillWidth(footer, in: root)
     }
 
     /// Reusable permission status card used by feature tabs.
@@ -269,42 +220,32 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         granted: Bool,
         settingsKey: String
     ) -> NSBox {
-        let inner = NSStackView()
-        inner.orientation = .vertical
-        inner.alignment = .leading
-        inner.spacing = 6
+        let inner = UIStyle.vStack(spacing: UIStyle.Metrics.sp8)
 
-        let title = NSTextField(labelWithString: L10n.tr("权限 / Permissions", "Permissions") + "  ·  " + name)
-        title.font = .systemFont(ofSize: 12, weight: .semibold)
-        inner.addArrangedSubview(title)
+        inner.addArrangedSubview(UIStyle.label(
+            L10n.tr("权限", "Permissions") + " · " + name,
+            font: UIStyle.Text.body(.semibold), color: UIStyle.Palette.text))
 
-        let purposeLabel = NSTextField(labelWithString: purpose)
-        purposeLabel.font = .systemFont(ofSize: 11)
-        purposeLabel.textColor = .secondaryLabelColor
-        purposeLabel.lineBreakMode = .byWordWrapping
-        purposeLabel.maximumNumberOfLines = 2
-        inner.addArrangedSubview(purposeLabel)
+        inner.addArrangedSubview(UIStyle.hint(purpose, color: UIStyle.Palette.textSecondary, lines: 2))
 
-        let row = NSStackView()
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 10
-        let status = NSTextField(labelWithString: granted
-            ? L10n.tr("已授权 / Granted", "Granted")
-            : L10n.tr("需要授权 / Authorization required", "Authorization required"))
-        status.font = .systemFont(ofSize: 11, weight: .medium)
-        status.textColor = granted ? .systemGreen : .systemOrange
-        status.setAccessibilityLabel(L10n.tr("权限状态: 已授权", "Permission status: Granted"))
-        row.addArrangedSubview(status)
-        row.addArrangedSubview(NSView())
+        let row = UIStyle.hStack(spacing: UIStyle.Metrics.sp10)
+        let pill = UIStyle.statusPill(
+            granted ? L10n.tr("已授权", "Granted") : L10n.tr("需要授权", "Authorization required"),
+            color: granted ? UIStyle.Palette.success : UIStyle.Palette.warning,
+            background: granted ? UIStyle.Palette.successSoft : UIStyle.Palette.warningSoft)
+        pill.setAccessibilityElement(true)
+        pill.setAccessibilityLabel(L10n.tr("权限状态", "Permission status"))
+        pill.setAccessibilityValue(granted ? L10n.tr("已授权", "Granted") : L10n.tr("需要授权", "Authorization required"))
+        row.addArrangedSubview(pill)
+        row.addArrangedSubview(UIStyle.spacer())
 
-        let button = NSButton(title: L10n.tr("打开系统设置", "Open System Settings"), target: self, action: #selector(openPermissionSettings(_:)))
-        button.bezelStyle = .rounded
+        let button = UIStyle.secondaryButton(L10n.tr("打开系统设置", "Open System Settings"), target: self, action: #selector(openPermissionSettings(_:)))
         button.identifier = NSUserInterfaceItemIdentifier(settingsKey)
         button.setAccessibilityLabel(L10n.tr("打开系统设置中的" + name, "Open " + name + " in System Settings"))
         button.setAccessibilityHelp(purpose)
         row.addArrangedSubview(button)
         inner.addArrangedSubview(row)
+        UIStyle.fillWidth(row, in: inner)
         return cardBox(containing: inner)
     }
 
@@ -322,42 +263,33 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     /// Compact multi-permission card for recording-related media access.
     func permissionSummaryCard(_ items: [(name: String, granted: Bool, settingsKey: String)]) -> NSBox {
-        let inner = NSStackView()
-        inner.orientation = .vertical
-        inner.alignment = .leading
-        inner.spacing = 8
+        let inner = UIStyle.vStack(spacing: UIStyle.Metrics.sp10)
 
-        let title = NSTextField(labelWithString: L10n.tr("录屏权限", "Recording permissions"))
-        title.font = .systemFont(ofSize: 12, weight: .semibold)
-        inner.addArrangedSubview(title)
+        inner.addArrangedSubview(UIStyle.label(
+            L10n.tr("录屏权限", "Recording permissions"),
+            font: UIStyle.Text.body(.semibold), color: UIStyle.Palette.text))
 
-        let statusRow = NSStackView()
-        statusRow.orientation = .horizontal
-        statusRow.alignment = .centerY
+        let statusRow = UIStyle.hStack(spacing: UIStyle.Metrics.sp8)
         statusRow.distribution = .fillEqually
-        statusRow.spacing = 8
         for item in items {
-            let status = NSTextField(labelWithString: (item.granted ? "✓ " : "! ") + item.name)
-            status.font = .systemFont(ofSize: 11, weight: .medium)
-            status.textColor = item.granted ? .systemGreen : .systemOrange
-            status.setAccessibilityElement(true)
-            status.setAccessibilityLabel(item.name)
-            status.setAccessibilityValue(item.granted
+            let pill = UIStyle.statusPill(
+                (item.granted ? "✓ " : "! ") + item.name,
+                color: item.granted ? UIStyle.Palette.success : UIStyle.Palette.warning,
+                background: item.granted ? UIStyle.Palette.successSoft : UIStyle.Palette.warningSoft)
+            pill.setAccessibilityElement(true)
+            pill.setAccessibilityLabel(item.name)
+            pill.setAccessibilityValue(item.granted
                 ? L10n.tr("已授权", "Granted")
                 : L10n.tr("需要授权", "Authorization required"))
-            statusRow.addArrangedSubview(status)
+            statusRow.addArrangedSubview(pill)
         }
         inner.addArrangedSubview(statusRow)
+        UIStyle.fillWidth(statusRow, in: inner)
 
-        let actionRow = NSStackView()
-        actionRow.orientation = .horizontal
-        actionRow.alignment = .centerY
-        actionRow.spacing = 8
+        let actionRow = UIStyle.hStack(spacing: UIStyle.Metrics.sp8)
         for item in items {
-            let button = NSButton(title: L10n.tr("设置", "Settings"), target: self, action: #selector(openPermissionSettings(_:)))
+            let button = UIStyle.secondaryButton(L10n.tr("设置", "Settings"), target: self, action: #selector(openPermissionSettings(_:)))
             button.identifier = NSUserInterfaceItemIdentifier(item.settingsKey)
-            button.controlSize = .small
-            button.bezelStyle = .rounded
             button.setAccessibilityLabel(L10n.tr("打开" + item.name + "系统设置", "Open " + item.name + " settings"))
             button.setAccessibilityHelp(L10n.tr("在系统设置中管理此权限。", "Manage this permission in System Settings."))
             actionRow.addArrangedSubview(button)
@@ -367,19 +299,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     func cardBox(containing inner: NSView) -> NSBox {
-        let box = NSBox()
-        UIStyle.cardBoxStyle(box)
-        box.translatesAutoresizingMaskIntoConstraints = false
-        box.contentViewMargins = NSSize(width: UIStyle.cardInnerMargin, height: 12)
-        inner.translatesAutoresizingMaskIntoConstraints = false
-        box.contentView?.addSubview(inner)
-        NSLayoutConstraint.activate([
-            inner.leadingAnchor.constraint(equalTo: box.contentView!.leadingAnchor, constant: 16),
-            inner.trailingAnchor.constraint(equalTo: box.contentView!.trailingAnchor, constant: -16),
-            inner.topAnchor.constraint(equalTo: box.contentView!.topAnchor, constant: 14),
-            inner.bottomAnchor.constraint(equalTo: box.contentView!.bottomAnchor, constant: -14),
-        ])
-        return box
+        UIStyle.card(inner)
     }
 
     /// Adds descriptive labels/help/value text without changing control behavior.
@@ -403,102 +323,24 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     func separatorView() -> NSView {
-        let v = NSView()
-        v.translatesAutoresizingMaskIntoConstraints = false
-        v.wantsLayer = true
-        v.layer?.backgroundColor = UIStyle.separatorColor().cgColor
-        v.heightAnchor.constraint(equalToConstant: 0.5).isActive = true
-        return v
+        UIStyle.hairline()
     }
 
     func sectionHeader(_ title: String, subtitle: String, symbol: String? = nil) -> NSView {
-        let row = NSStackView()
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 10
-
-        let iconBox = NSView()
-        iconBox.wantsLayer = true
-        iconBox.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.09).cgColor
-        iconBox.layer?.cornerRadius = 8
-        iconBox.translatesAutoresizingMaskIntoConstraints = false
-        iconBox.widthAnchor.constraint(equalToConstant: 30).isActive = true
-        iconBox.heightAnchor.constraint(equalToConstant: 30).isActive = true
-        let iv = NSImageView()
-        if let sym = symbol, let img = NSImage(systemSymbolName: sym, accessibilityDescription: nil) {
-            iv.image = img
-            iv.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
-            iv.contentTintColor = NSColor.controlAccentColor
-        } else {
-            iv.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
-            iv.contentTintColor = NSColor.controlAccentColor
-        }
-        iv.translatesAutoresizingMaskIntoConstraints = false
-        iconBox.addSubview(iv)
-        NSLayoutConstraint.activate([
-            iv.centerXAnchor.constraint(equalTo: iconBox.centerXAnchor),
-            iv.centerYAnchor.constraint(equalTo: iconBox.centerYAnchor),
-        ])
-        row.addArrangedSubview(iconBox)
-
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 2
-        let label = NSTextField(labelWithString: title)
-        label.font = .systemFont(ofSize: 13, weight: .semibold)
-        label.textColor = .labelColor
-        stack.addArrangedSubview(label)
-        let sub = NSTextField(labelWithString: subtitle)
-        sub.font = .systemFont(ofSize: 11, weight: .regular)
-        sub.textColor = NSColor.secondaryLabelColor
-        stack.addArrangedSubview(sub)
-        row.addArrangedSubview(stack)
-        return row
+        UIStyle.sectionHeader(title: title, subtitle: subtitle, symbol: symbol)
     }
 
     /// 一行模板:[✓ 名称] [文件名] [↑] [↓] [编辑] [删除]
     func makeTemplateRow(index: Int, item: NewFileItem) -> NSView {
-        let row = NSStackView()
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 8
-        row.edgeInsets = NSEdgeInsets(top: 4, left: 6, bottom: 4, right: 6)
-        row.wantsLayer = true
-        row.layer?.cornerRadius = 7
-        row.layer?.backgroundColor = NSColor.clear.cgColor
+        let row = UIStyle.hStack(spacing: UIStyle.Metrics.sp8)
+        row.edgeInsets = NSEdgeInsets(top: UIStyle.Metrics.sp4, left: UIStyle.Metrics.sp6, bottom: UIStyle.Metrics.sp4, right: UIStyle.Metrics.sp6)
 
-        let check = NSButton(checkboxWithTitle: item.displayName, target: self, action: #selector(toggleTemplate(_:)))
+        let check = UIStyle.checkbox(item.displayName, target: self, action: #selector(toggleTemplate(_:)))
         check.tag = index
         check.state = item.enabled ? .on : .off
         row.addArrangedSubview(check)
 
-        let filePill = NSTextField(labelWithString: item.displayFilename)
-        filePill.font = .monospacedSystemFont(ofSize: 10.5, weight: .regular)
-        filePill.textColor = NSColor.secondaryLabelColor
-        filePill.lineBreakMode = .byTruncatingMiddle
-        filePill.wantsLayer = true
-        filePill.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.08).cgColor
-        filePill.layer?.cornerRadius = 5
-        filePill.drawsBackground = false
-        filePill.isBezeled = false
-        filePill.isEditable = false
-        filePill.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        // 给 pill 加内边距：用额外容器
-        let pillBox = NSView()
-        pillBox.wantsLayer = true
-        pillBox.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.08).cgColor
-        pillBox.layer?.cornerRadius = 5
-        pillBox.translatesAutoresizingMaskIntoConstraints = false
-        filePill.translatesAutoresizingMaskIntoConstraints = false
-        pillBox.addSubview(filePill)
-        NSLayoutConstraint.activate([
-            filePill.leadingAnchor.constraint(equalTo: pillBox.leadingAnchor, constant: 6),
-            filePill.trailingAnchor.constraint(equalTo: pillBox.trailingAnchor, constant: -6),
-            filePill.topAnchor.constraint(equalTo: pillBox.topAnchor, constant: 3),
-            filePill.bottomAnchor.constraint(equalTo: pillBox.bottomAnchor, constant: -3),
-        ])
-        row.addArrangedSubview(pillBox)
+        row.addArrangedSubview(UIStyle.pill(item.displayFilename))
 
         let up = smallButton(symbol: "chevron.up", action: #selector(moveTemplateUp(_:)), tag: index)
         let upLabel = L10n.tr("上移模板", "Move template up")
@@ -530,49 +372,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     func smallButton(symbol: String, action: Selector, tag: Int) -> NSButton {
-        let button = NSButton()
-        if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) {
-            image.isTemplate = true
-            button.image = image
-            button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
-        } else {
-            button.title = symbol
-        }
-        button.bezelStyle = .inline
-        button.isBordered = false
-        button.wantsLayer = true
-        button.layer?.cornerRadius = 7
-        button.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.72).cgColor
-        button.layer?.borderWidth = 1
-        button.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.08).cgColor
-        button.contentTintColor = NSColor.secondaryLabelColor
-        button.controlSize = .small
-        button.target = self
-        button.action = action
+        let button = UIStyle.iconButton(symbol: symbol, target: self, action: action)
         button.tag = tag
-        button.widthAnchor.constraint(equalToConstant: 28).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 24).isActive = true
         return button
-    }
-
-    func pillActionButton(_ title: String, symbol: String, filled: Bool, action: Selector) -> NSButton {
-        let b = NSButton(title: title, target: self, action: action)
-        b.bezelStyle = filled ? .inline : .rounded
-        b.isBordered = !filled
-        b.wantsLayer = true
-        b.layer?.cornerRadius = 8
-        if filled {
-            b.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
-            b.contentTintColor = .white
-            let attr = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.white])
-            b.attributedTitle = attr
-        }
-        if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) {
-            b.image = img
-            b.imagePosition = .imageLeading
-            b.contentTintColor = filled ? .white : NSColor.labelColor
-        }
-        return b
     }
 
     // MARK: - 刷新
@@ -624,19 +426,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             row.widthAnchor.constraint(equalTo: listStack.widthAnchor, constant: -16).isActive = true
             row.heightAnchor.constraint(greaterThanOrEqualToConstant: 24).isActive = true
             if index < config.newFiles.count - 1 {
-                let sep = NSView()
-                sep.translatesAutoresizingMaskIntoConstraints = false
-                sep.wantsLayer = true
-                sep.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.25).cgColor
-                sep.heightAnchor.constraint(equalToConstant: 1).isActive = true
+                let sep = UIStyle.hairline()
                 listStack.addArrangedSubview(sep)
-                sep.widthAnchor.constraint(equalTo: listStack.widthAnchor, constant: -8).isActive = true
+                UIStyle.fillWidth(sep, in: listStack, inset: UIStyle.Metrics.sp8)
             }
         }
         if config.newFiles.isEmpty {
-            let empty = NSTextField(labelWithString: L10n.tr("暂无模板，点击「添加模板」新建", "No templates — click Add Template to create"))
-            empty.textColor = .secondaryLabelColor
-            listStack.addArrangedSubview(empty)
+            listStack.addArrangedSubview(UIStyle.label(
+                L10n.tr("暂无模板，点击「添加模板」新建", "No templates — click Add Template to create"),
+                font: UIStyle.Text.body(), color: UIStyle.Palette.textSecondary))
         }
     }
 
@@ -905,21 +703,17 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         content.autoresizingMask = [.width, .height]
         sheetWindow.contentView = content
 
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 8
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        let stack = UIStyle.vStack(spacing: UIStyle.Metrics.sp8)
         content.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
-            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 14),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -12),
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: UIStyle.Metrics.sp16),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -UIStyle.Metrics.sp16),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: UIStyle.Metrics.sp14),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -UIStyle.Metrics.sp12),
         ])
 
-        let nameLabel = NSTextField(labelWithString: L10n.tr("名称(菜单里显示)", "Name (shown in menu)"))
-        nameLabel.font = .systemFont(ofSize: 11)
+        let nameLabel = UIStyle.label(L10n.tr("名称(菜单里显示)", "Name (shown in menu)"),
+                                      font: UIStyle.Text.caption(), color: UIStyle.Palette.textSecondary)
         sheetNameField = NSTextField()
         sheetNameField.stringValue = item.name
         sheetNameField.placeholderString = L10n.tr("如:Markdown 文档", "e.g. Markdown")
@@ -927,8 +721,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         stack.addArrangedSubview(sheetNameField)
         sheetNameField.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
-        let fileLabel = NSTextField(labelWithString: L10n.tr("文件名(重名自动加序号)", "File name (auto-numbered on collision)"))
-        fileLabel.font = .systemFont(ofSize: 11)
+        let fileLabel = UIStyle.label(L10n.tr("文件名(重名自动加序号)", "File name (auto-numbered on collision)"),
+                                      font: UIStyle.Text.caption(), color: UIStyle.Palette.textSecondary)
         sheetFileField = NSTextField()
         sheetFileField.stringValue = item.filename
         sheetFileField.placeholderString = L10n.tr("如:新建文档.md", "e.g. Document.md")
@@ -941,12 +735,22 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                 ? L10n.tr("模板内容(二进制 Base64,一般无需修改)", "Template content (binary Base64, usually leave as-is)")
                 : L10n.tr("模板内容(文件初始内容)", "Template content (initial file content)")
         )
-        contentLabel.font = .systemFont(ofSize: 11)
+        contentLabel.font = UIStyle.Text.caption()
+        contentLabel.textColor = UIStyle.Palette.textSecondary
+        contentLabel.lineBreakMode = .byWordWrapping
+        contentLabel.maximumNumberOfLines = 2
         stack.addArrangedSubview(contentLabel)
 
         let textScroll = NSScrollView()
         textScroll.hasVerticalScroller = true
-        textScroll.borderType = .bezelBorder
+        textScroll.borderType = .noBorder
+        textScroll.drawsBackground = true
+        textScroll.backgroundColor = .textBackgroundColor
+        textScroll.wantsLayer = true
+        textScroll.layer?.cornerRadius = UIStyle.Metrics.radiusM
+        textScroll.layer?.borderWidth = 1
+        textScroll.layer?.borderColor = UIStyle.Palette.controlBorder.cgColor
+        textScroll.layer?.masksToBounds = true
         textScroll.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             textScroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
@@ -955,7 +759,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 380, height: 150))
         textView.autoresizingMask = [.width]
         textView.isRichText = false
-        textView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        textView.font = UIStyle.Text.mono(12)
+        textView.textContainerInset = NSSize(width: UIStyle.Metrics.sp6, height: UIStyle.Metrics.sp6)
+        textView.drawsBackground = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.string = item.content
@@ -964,14 +770,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         sheetTextView = textView
         stack.addArrangedSubview(textScroll)
 
-        let buttons = NSStackView()
-        buttons.orientation = .horizontal
-        buttons.spacing = 10
-        let cancel = NSButton(title: L10n.tr("取消", "Cancel"), target: self, action: #selector(sheetCancel))
+        let buttons = UIStyle.hStack(spacing: UIStyle.Metrics.sp10)
+        let cancel = UIStyle.secondaryButton(L10n.tr("取消", "Cancel"), target: self, action: #selector(sheetCancel))
         cancel.keyEquivalent = "\u{1b}"
-        cancel.bezelStyle = .rounded
-        let ok = NSButton(title: L10n.tr("保存", "Save"), target: self, action: #selector(sheetSave))
-        ok.bezelStyle = .rounded
+        let ok = UIStyle.primaryButton(L10n.tr("保存", "Save"), target: self, action: #selector(sheetSave))
         ok.keyEquivalent = "\r"
         buttons.addArrangedSubview(cancel)
         buttons.addArrangedSubview(ok)

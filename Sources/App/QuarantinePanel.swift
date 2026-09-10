@@ -30,105 +30,55 @@ final class QuarantinePanel: NSObject {
             defer: false
         )
         win.title = "去除隔离"
-        win.subtitle = "拖入后一键清理"
-        win.titleVisibility = .hidden
-        win.titlebarAppearsTransparent = true
-        if #available(macOS 13.0, *) { win.toolbarStyle = .unifiedCompact }
-        win.backgroundColor = NSColor.windowBackgroundColor
-        win.isReleasedWhenClosed = false
+        UIStyle.applyWindowChrome(win, subtitle: "拖入后一键清理")
         win.center()
         window = win
 
         guard let content = win.contentView else { return }
-        content.wantsLayer = true
-        let bg = NSVisualEffectView()
-        bg.material = .hudWindow
-        bg.blendingMode = .behindWindow
-        bg.state = .active
-        bg.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(bg)
-        NSLayoutConstraint.activate([
-            bg.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            bg.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            bg.topAnchor.constraint(equalTo: content.topAnchor),
-            bg.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-        ])
+        UIStyle.attachHUDMaterial(to: content)
 
-        let root = NSStackView()
-        root.orientation = .vertical
-        root.spacing = 16
-        root.translatesAutoresizingMaskIntoConstraints = false
+        let root = UIStyle.vStack(spacing: UIStyle.Metrics.sp16)
         content.addSubview(root)
         NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: UIStyle.outerPadding),
-            root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -UIStyle.outerPadding),
-            root.topAnchor.constraint(equalTo: content.topAnchor, constant: UIStyle.outerPadding),
-            root.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -14),
+            root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: UIStyle.Metrics.windowPadding),
+            root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -UIStyle.Metrics.windowPadding),
+            root.topAnchor.constraint(equalTo: content.topAnchor, constant: UIStyle.Metrics.windowPadding),
+            root.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -UIStyle.Metrics.sp14),
         ])
 
-        let headerRow = NSStackView()
-        headerRow.orientation = .horizontal
-        headerRow.alignment = .centerY
-        headerRow.spacing = 10
-        let hdrIcon = NSView()
-        hdrIcon.wantsLayer = true
-        hdrIcon.layer?.backgroundColor = NSColor.systemOrange.withAlphaComponent(0.14).cgColor
-        hdrIcon.layer?.cornerRadius = 8
-        hdrIcon.translatesAutoresizingMaskIntoConstraints = false
-        hdrIcon.widthAnchor.constraint(equalToConstant: 30).isActive = true
-        hdrIcon.heightAnchor.constraint(equalToConstant: 30).isActive = true
-        let hdrImg = NSImageView(image: NSImage(systemSymbolName: "shield.lefthalf.filled", accessibilityDescription: nil) ?? NSImage())
-        hdrImg.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
-        hdrImg.contentTintColor = NSColor.systemOrange
-        hdrImg.translatesAutoresizingMaskIntoConstraints = false
-        hdrIcon.addSubview(hdrImg)
-        NSLayoutConstraint.activate([hdrImg.centerXAnchor.constraint(equalTo: hdrIcon.centerXAnchor), hdrImg.centerYAnchor.constraint(equalTo: hdrIcon.centerYAnchor)])
-        headerRow.addArrangedSubview(hdrIcon)
-        let hdrStack = NSStackView()
-        hdrStack.orientation = .vertical
-        hdrStack.spacing = 2
-        let hdrTitle = NSTextField(labelWithString: "去除隔离")
-        hdrTitle.font = .systemFont(ofSize: 13, weight: .semibold)
-        hdrTitle.textColor = .labelColor
-        hdrStack.addArrangedSubview(hdrTitle)
-        let hdrSub = NSTextField(labelWithString: "拖入文件后一键清理隔离属性，可直接打开")
-        hdrSub.font = .systemFont(ofSize: 11, weight: .regular)
-        hdrSub.textColor = NSColor.secondaryLabelColor
-        hdrStack.addArrangedSubview(hdrSub)
-        headerRow.addArrangedSubview(hdrStack)
+        let headerRow = UIStyle.sectionHeader(
+            title: "去除隔离",
+            subtitle: "拖入文件后一键清理隔离属性，可直接打开",
+            symbol: "shield.lefthalf.filled",
+            tint: UIStyle.Palette.neutralTint
+        )
         root.addArrangedSubview(headerRow)
-        headerRow.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        UIStyle.fillWidth(headerRow, in: root)
 
-        let hint = NSTextField(labelWithString: "把 .app / .dmg / .pkg 等拖到下方区域，轻点“去除隔离”即执行 xattr -dr")
-        hint.font = .systemFont(ofSize: 11, weight: .regular)
-        hint.textColor = NSColor.secondaryLabelColor.withAlphaComponent(0.9)
-        hint.lineBreakMode = .byWordWrapping
-        hint.maximumNumberOfLines = 2
-        hint.preferredMaxLayoutWidth = 520
+        let hint = UIStyle.hint("把 .app / .dmg / .pkg 等拖到下方区域，轻点“去除隔离”即执行 xattr -dr", maxWidth: 520, lines: 2)
         root.addArrangedSubview(hint)
+        UIStyle.fillWidth(hint, in: root)
 
         let dropView = DropView(panel: self)
         dropView.wantsLayer = true
-        dropView.layer?.cornerRadius = 12
-        dropView.layer?.borderWidth = 1.2
-        dropView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.14).cgColor
-        dropView.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.55).cgColor
+        dropView.layer?.cornerRadius = UIStyle.Metrics.radiusL
+        dropView.layer?.masksToBounds = true
         dropView.translatesAutoresizingMaskIntoConstraints = false
         root.addArrangedSubview(dropView)
         dropView.heightAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
-        dropView.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        UIStyle.fillWidth(dropView, in: root)
 
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.borderType = .noBorder
         scroll.wantsLayer = true
-        scroll.layer?.cornerRadius = 10
+        scroll.layer?.cornerRadius = UIStyle.Metrics.radiusL
         scroll.layer?.borderWidth = 1
-        scroll.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(UIStyle.cardBorderAlpha).cgColor
+        scroll.layer?.borderColor = UIStyle.Palette.cardBorder.cgColor
         scroll.translatesAutoresizingMaskIntoConstraints = false
         root.addArrangedSubview(scroll)
         scroll.heightAnchor.constraint(equalToConstant: 160).isActive = true
-        scroll.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        UIStyle.fillWidth(scroll, in: root)
 
         table = NSTableView()
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("path"))
@@ -144,45 +94,21 @@ final class QuarantinePanel: NSObject {
         table.registerForDraggedTypes([.fileURL])
 
         // 底部按钮
-        let bar = NSStackView()
-        bar.orientation = .horizontal
-        bar.spacing = 10
-        bar.alignment = .centerY
+        let bar = UIStyle.hStack(spacing: UIStyle.Metrics.sp10)
 
-        let selectBtn = NSButton(title: "选择文件…", target: self, action: #selector(pickFiles))
-        selectBtn.bezelStyle = .rounded
-        selectBtn.controlSize = .small
-        selectBtn.wantsLayer = true
-        selectBtn.layer?.cornerRadius = 7
-        bar.addArrangedSubview(selectBtn)
+        bar.addArrangedSubview(UIStyle.secondaryButton("选择文件…", target: self, action: #selector(pickFiles)))
+        bar.addArrangedSubview(UIStyle.secondaryButton("清空", target: self, action: #selector(clear)))
+        bar.addArrangedSubview(UIStyle.spacer())
 
-        let clearBtn = NSButton(title: "清空", target: self, action: #selector(clear))
-        clearBtn.bezelStyle = .rounded
-        clearBtn.controlSize = .small
-        clearBtn.wantsLayer = true
-        clearBtn.layer?.cornerRadius = 7
-        bar.addArrangedSubview(clearBtn)
-
-        bar.addArrangedSubview(NSView())
-
-        statusLabel = NSTextField(labelWithString: "就绪")
-        statusLabel.font = .systemFont(ofSize: 11, weight: .regular)
-        statusLabel.textColor = NSColor.secondaryLabelColor.withAlphaComponent(0.9)
+        statusLabel = UIStyle.label("就绪", font: UIStyle.Text.caption(), color: UIStyle.Palette.textSecondary)
         bar.addArrangedSubview(statusLabel)
 
-        stripButton = NSButton(title: "去除隔离", target: self, action: #selector(strip))
-        stripButton.bezelStyle = .inline
-        stripButton.isBordered = false
-        stripButton.wantsLayer = true
-        stripButton.layer?.cornerRadius = 8
-        stripButton.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
-        stripButton.contentTintColor = .white
-        stripButton.attributedTitle = NSAttributedString(string: "去除隔离", attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.white])
+        stripButton = UIStyle.primaryButton("去除隔离", target: self, action: #selector(strip))
         stripButton.keyEquivalent = "\r"
         bar.addArrangedSubview(stripButton)
 
         root.addArrangedSubview(bar)
-        bar.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        UIStyle.fillWidth(bar, in: root)
 
         // 让 dropView 接受拖入
         dropView.registerForDraggedTypes([.fileURL])
@@ -270,7 +196,7 @@ extension QuarantinePanel: NSTableViewDataSource, NSTableViewDelegate {
             rowStack.translatesAutoresizingMaskIntoConstraints = false
             let icon = NSImageView(image: NSImage(systemSymbolName: "doc.fill", accessibilityDescription: nil) ?? NSImage())
             icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
-            icon.contentTintColor = NSColor.tertiaryLabelColor
+            icon.contentTintColor = UIStyle.Palette.textTertiary
             icon.translatesAutoresizingMaskIntoConstraints = false
             icon.widthAnchor.constraint(equalToConstant: 14).isActive = true
             icon.heightAnchor.constraint(equalToConstant: 14).isActive = true
@@ -278,8 +204,8 @@ extension QuarantinePanel: NSTableViewDataSource, NSTableViewDelegate {
             let tf = NSTextField(labelWithString: "")
             tf.identifier = NSUserInterfaceItemIdentifier("tf")
             tf.lineBreakMode = .byTruncatingMiddle
-            tf.font = .systemFont(ofSize: 11.5, weight: .regular)
-            tf.textColor = NSColor.labelColor
+            tf.font = UIStyle.Text.body()
+            tf.textColor = UIStyle.Palette.text
             tf.translatesAutoresizingMaskIntoConstraints = false
             rowStack.addArrangedSubview(tf)
             view?.addSubview(rowStack)
@@ -314,61 +240,44 @@ private final class DropView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        let bg = hovering ? NSColor.controlAccentColor.withAlphaComponent(0.08) : NSColor.white.withAlphaComponent(0.62)
+        let bg = hovering ? UIStyle.Palette.accentFaint : UIStyle.Palette.card
         bg.setFill()
-        let bgPath = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 12, yRadius: 12)
+        let bgPath = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: UIStyle.Metrics.radiusL, yRadius: UIStyle.Metrics.radiusL)
         bgPath.fill()
         // dashed border when idle, solid accent when hovering
-        let borderPath = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 12, yRadius: 12)
+        let borderPath = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: UIStyle.Metrics.radiusL, yRadius: UIStyle.Metrics.radiusL)
         borderPath.lineWidth = 1.2
         if hovering {
-            NSColor.controlAccentColor.withAlphaComponent(0.55).setStroke()
+            UIStyle.Palette.accent.withAlphaComponent(0.55).setStroke()
             borderPath.stroke()
         } else {
-            NSColor.separatorColor.withAlphaComponent(0.22).setStroke()
+            UIStyle.Palette.controlBorder.setStroke()
             borderPath.setLineDash([6, 5], count: 2, phase: 0)
             borderPath.stroke()
         }
-        // icon — 极简符号
+        // 图标：用 palette 着色配置，保证深浅色下都可见
         let iconName = hovering ? "arrow.down.doc.fill" : "tray.and.arrow.down"
         if let icon = NSImage(systemSymbolName: iconName, accessibilityDescription: nil) {
+            let imgColor: NSColor = hovering ? UIStyle.Palette.accent : UIStyle.Palette.textTertiary
             let cfg = NSImage.SymbolConfiguration(pointSize: 20, weight: .regular)
+                .applying(NSImage.SymbolConfiguration(paletteColors: [imgColor]))
             if let sized = icon.withSymbolConfiguration(cfg) {
-                let imgColor: NSColor = hovering ? .controlAccentColor : .tertiaryLabelColor
                 let imgSize = NSSize(width: 24, height: 24)
-                let imgRect = NSRect(x: (bounds.width - imgSize.width)/2, y: bounds.midY + 10, width: imgSize.width, height: imgSize.height)
-                // 用模板色绘制
-                sized.isTemplate = true
-                // 通过 contentTint 模拟：创建临时 ImageView 绘制
-                NSGraphicsContext.saveGraphicsState()
-                imgColor.set()
-                // 直接绘制符号，系统会自动用当前色
-                let rep = sized.bestRepresentation(for: imgRect, context: nil, hints: nil)
-                if let r = rep {
-                    let tmp = NSImage(size: imgSize)
-                    tmp.lockFocus()
-                    imgColor.set()
-                    r.draw(in: NSRect(origin: .zero, size: imgSize))
-                    tmp.unlockFocus()
-                    tmp.isTemplate = false
-                    // 简化：直接用符号原色绘制，hover 用 accent
-                }
-                // 最简回退：直接绘制原符号（系统会按 tint 显示）
-                icon.withSymbolConfiguration(cfg)?.draw(in: imgRect)
-                NSGraphicsContext.restoreGraphicsState()
+                let imgRect = NSRect(x: (bounds.width - imgSize.width) / 2, y: bounds.midY + 10, width: imgSize.width, height: imgSize.height)
+                sized.draw(in: imgRect)
             }
         }
         let text = hovering ? "松手加入 ✓" : "拖到这里"
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 14, weight: .medium),
-            .foregroundColor: hovering ? NSColor.controlAccentColor : NSColor.secondaryLabelColor,
+            .font: UIStyle.Text.reading(.medium),
+            .foregroundColor: hovering ? UIStyle.Palette.accent : UIStyle.Palette.textSecondary,
         ]
         let size = (text as NSString).size(withAttributes: attrs)
-        (text as NSString).draw(at: NSPoint(x: (bounds.width - size.width)/2, y: bounds.midY - 6), withAttributes: attrs)
+        (text as NSString).draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: bounds.midY - 6), withAttributes: attrs)
         let sub = L10n.tr("支持 .app / .dmg / .pkg / 文件夹  ·  亦可点「选择文件」", "Supports .app / .dmg / .pkg / folders  ·  or click \"Choose Files\"")
-        let attrs2: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor]
+        let attrs2: [NSAttributedString.Key: Any] = [.font: UIStyle.Text.caption(), .foregroundColor: UIStyle.Palette.textTertiary]
         let size2 = (sub as NSString).size(withAttributes: attrs2)
-        (sub as NSString).draw(at: NSPoint(x: (bounds.width - size2.width)/2, y: bounds.midY - 26), withAttributes: attrs2)
+        (sub as NSString).draw(at: NSPoint(x: (bounds.width - size2.width) / 2, y: bounds.midY - 26), withAttributes: attrs2)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { hovering = true; return .copy }

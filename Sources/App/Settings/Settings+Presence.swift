@@ -5,21 +5,7 @@ import SharedCore
 extension SettingsWindowController {
     func buildPresenceTab(tabView: NSTabView) {
         // ========== Tab 6: 人脸看守 ==========
-        let tab = NSTabViewItem(identifier: "presence")
-        tab.label = L10n.tr("人脸", "Presence")
-        let view = NSView()
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 18
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
-            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
-            stack.topAnchor.constraint(equalTo: view.topAnchor, constant: 18),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -8),
-        ])
+        let stack = UIStyle.makeTab(tabView, identifier: "presence", label: L10n.tr("人脸", "Presence"))
 
         stack.addArrangedSubview(
             sectionHeader(
@@ -38,133 +24,95 @@ extension SettingsWindowController {
         stack.addArrangedSubview(cameraCard)
         cameraCard.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
-        let inner = NSStackView()
-        inner.orientation = .vertical
-        inner.alignment = .leading
-        inner.spacing = 12
+        let inner = UIStyle.vStack(spacing: UIStyle.Metrics.sp12)
 
-        presenceCheck = NSButton(checkboxWithTitle: L10n.tr("离开自动锁屏(无操作超时后确认,无人则锁)", "Auto-lock when away (checks after idle, locks if empty)"), target: self, action: #selector(togglePresence))
+        presenceCheck = UIStyle.checkbox(L10n.tr("离开自动锁屏(无操作超时后确认,无人则锁)", "Auto-lock when away (checks after idle, locks if empty)"), target: self, action: #selector(togglePresence))
         presenceCheck.setAccessibilityHelp(L10n.tr("开启后感应键鼠空闲,超时才短暂开摄像头确认,无人则自动锁屏。", "When on, watches for keyboard/mouse idle, briefly confirms with the camera, and locks if no one is there."))
         inner.addArrangedSubview(presenceCheck)
 
-        presenceStatusHint = NSTextField(labelWithString: "")
-        presenceStatusHint.font = .systemFont(ofSize: 11)
-        presenceStatusHint.textColor = .secondaryLabelColor
-        presenceStatusHint.lineBreakMode = .byWordWrapping
-        presenceStatusHint.maximumNumberOfLines = 2
-        presenceStatusHint.preferredMaxLayoutWidth = 460
+        presenceStatusHint = UIStyle.hint("", maxWidth: 460, lines: 2)
         inner.addArrangedSubview(presenceStatusHint)
 
-        inner.addArrangedSubview(separatorView())
+        let sep1 = separatorView()
+        inner.addArrangedSubview(sep1)
+        UIStyle.fillWidth(sep1, in: inner)
 
         // 1) 无操作多少秒后开始检测
         presenceLockStepper = makePresenceStepper(min: 3, max: 30, increment: 1, defaultValue: 8, action: #selector(presenceLockChanged))
-        let lockRow = NSStackView()
-        lockRow.orientation = .horizontal
-        lockRow.alignment = .centerY
-        lockRow.spacing = 8
-        let lockLabel = NSTextField(labelWithString: L10n.tr("无操作多久后检测(秒)", "Idle before checking (s)"))
-        lockLabel.font = .systemFont(ofSize: 12)
-        lockRow.addArrangedSubview(lockLabel)
+        let lockRow = UIStyle.hStack(spacing: UIStyle.Metrics.sp8)
+        lockRow.addArrangedSubview(UIStyle.label(
+            L10n.tr("无操作多久后检测(秒)", "Idle before checking (s)"),
+            font: UIStyle.Text.body(), color: UIStyle.Palette.text
+        ))
         lockRow.addArrangedSubview(presenceLockStepper)
-        presenceLockValueLabel = NSTextField(labelWithString: "8s")
-        presenceLockValueLabel.font = .systemFont(ofSize: 11)
-        presenceLockValueLabel.textColor = .secondaryLabelColor
-        presenceLockValueLabel.alignment = .right
+        presenceLockValueLabel = UIStyle.valueLabel("8s")
         presenceLockValueLabel.widthAnchor.constraint(equalToConstant: 34).isActive = true
         lockRow.addArrangedSubview(presenceLockValueLabel)
         inner.addArrangedSubview(lockRow)
 
         // 2) 确认有人后多久复查(检测间隔)
         presenceConfirmStepper = makePresenceStepper(min: 10, max: 300, increment: 10, defaultValue: 60, action: #selector(presenceConfirmChanged))
-        let confirmRow = NSStackView()
-        confirmRow.orientation = .horizontal
-        confirmRow.alignment = .centerY
-        confirmRow.spacing = 8
-        let confirmLabel = NSTextField(labelWithString: L10n.tr("检测间隔(每多久复查,秒)", "Recheck every (s)"))
-        confirmLabel.font = .systemFont(ofSize: 12)
-        confirmRow.addArrangedSubview(confirmLabel)
+        let confirmRow = UIStyle.hStack(spacing: UIStyle.Metrics.sp8)
+        confirmRow.addArrangedSubview(UIStyle.label(
+            L10n.tr("检测间隔(每多久复查,秒)", "Recheck every (s)"),
+            font: UIStyle.Text.body(), color: UIStyle.Palette.text
+        ))
         confirmRow.addArrangedSubview(presenceConfirmStepper)
-        presenceConfirmValueLabel = NSTextField(labelWithString: "60s")
-        presenceConfirmValueLabel.font = .systemFont(ofSize: 11)
-        presenceConfirmValueLabel.textColor = .secondaryLabelColor
-        presenceConfirmValueLabel.alignment = .right
+        presenceConfirmValueLabel = UIStyle.valueLabel("60s")
         presenceConfirmValueLabel.widthAnchor.constraint(equalToConstant: 34).isActive = true
         confirmRow.addArrangedSubview(presenceConfirmValueLabel)
         inner.addArrangedSubview(confirmRow)
 
         // 3) 宽限期
         presenceGraceStepper = makePresenceStepper(min: 5, max: 60, increment: 5, defaultValue: 15, action: #selector(presenceGraceChanged))
-        let graceRow = NSStackView()
-        graceRow.orientation = .horizontal
-        graceRow.alignment = .centerY
-        graceRow.spacing = 8
-        let graceLabel = NSTextField(labelWithString: L10n.tr("开启/解锁后宽限(秒)", "Grace after unlock (s)"))
-        graceLabel.font = .systemFont(ofSize: 12)
-        graceRow.addArrangedSubview(graceLabel)
+        let graceRow = UIStyle.hStack(spacing: UIStyle.Metrics.sp8)
+        graceRow.addArrangedSubview(UIStyle.label(
+            L10n.tr("开启/解锁后宽限(秒)", "Grace after unlock (s)"),
+            font: UIStyle.Text.body(), color: UIStyle.Palette.text
+        ))
         graceRow.addArrangedSubview(presenceGraceStepper)
-        presenceGraceValueLabel = NSTextField(labelWithString: "15s")
-        presenceGraceValueLabel.font = .systemFont(ofSize: 11)
-        presenceGraceValueLabel.textColor = .secondaryLabelColor
-        presenceGraceValueLabel.alignment = .right
+        presenceGraceValueLabel = UIStyle.valueLabel("15s")
         presenceGraceValueLabel.widthAnchor.constraint(equalToConstant: 34).isActive = true
         graceRow.addArrangedSubview(presenceGraceValueLabel)
         inner.addArrangedSubview(graceRow)
 
-        inner.addArrangedSubview(separatorView())
+        let sep2 = separatorView()
+        inner.addArrangedSubview(sep2)
+        UIStyle.fillWidth(sep2, in: inner)
 
-        presenceStrangerCheck = NSButton(checkboxWithTitle: L10n.tr("陌生人也锁屏(需先注册主人脸)", "Lock on unfamiliar faces (enroll owner first)"), target: self, action: #selector(togglePresenceStranger))
+        presenceStrangerCheck = UIStyle.checkbox(L10n.tr("陌生人也锁屏(需先注册主人脸)", "Lock on unfamiliar faces (enroll owner first)"), target: self, action: #selector(togglePresenceStranger))
         presenceStrangerCheck.setAccessibilityHelp(L10n.tr("开启后,摄像头看到人但不是主人脸也会锁屏。只认「是主人/不是主人」,不识别具体是谁,特征只存本机。", "When on, a face that doesn't match the owner also locks the screen. It only answers owner-or-not, never identifies who; the feature vector stays on your Mac."))
         inner.addArrangedSubview(presenceStrangerCheck)
 
-        let strangerRow = NSStackView()
-        strangerRow.orientation = .horizontal
-        strangerRow.alignment = .centerY
-        strangerRow.spacing = 8
-        presenceEnrollButton = NSButton(title: L10n.tr("注册主人脸", "Enroll owner face"), target: self, action: #selector(enrollOwnerFace))
-        presenceEnrollButton.bezelStyle = .rounded
-        presenceEnrollButton.controlSize = .small
+        let strangerRow = UIStyle.hStack(spacing: UIStyle.Metrics.sp8)
+        presenceEnrollButton = UIStyle.secondaryButton(L10n.tr("注册主人脸", "Enroll owner face"), target: self, action: #selector(enrollOwnerFace))
         strangerRow.addArrangedSubview(presenceEnrollButton)
-        presenceOwnerStatusLabel = NSTextField(labelWithString: "")
-        presenceOwnerStatusLabel.font = .systemFont(ofSize: 11)
-        presenceOwnerStatusLabel.textColor = .secondaryLabelColor
-        presenceOwnerStatusLabel.lineBreakMode = .byWordWrapping
-        presenceOwnerStatusLabel.maximumNumberOfLines = 2
-        presenceOwnerStatusLabel.preferredMaxLayoutWidth = 360
+        presenceOwnerStatusLabel = UIStyle.hint("", maxWidth: 360, lines: 2)
         strangerRow.addArrangedSubview(presenceOwnerStatusLabel)
         inner.addArrangedSubview(strangerRow)
 
-        presenceSaveCheck = NSButton(checkboxWithTitle: L10n.tr("锁屏前保存摄像头快照(排查误锁用)", "Save camera snapshot before locking (debug)"), target: self, action: #selector(togglePresenceSave))
+        presenceSaveCheck = UIStyle.checkbox(L10n.tr("锁屏前保存摄像头快照(排查误锁用)", "Save camera snapshot before locking (debug)"), target: self, action: #selector(togglePresenceSave))
         presenceSaveCheck.setAccessibilityHelp(L10n.tr("确认无人并即将锁屏时,把那刻画面存到本机 presence-cap 目录,方便核对当时是否真的没人。只留本机,可随时删除。", "When a lock is about to happen, save that frame to the local presence-cap folder to verify whether anyone was really there. Stays on your Mac; feel free to delete."))
         inner.addArrangedSubview(presenceSaveCheck)
 
-        let saveHint = NSTextField(labelWithString: L10n.tr("保存位置:配置文件同目录下的 Presence-cap 子文件夹,只有无人判定触发锁屏时才写。", "Saved under the Presence-cap folder next to your config; written only when a no-face check triggers a lock."))
-        saveHint.font = .systemFont(ofSize: 10.5, weight: .regular)
-        saveHint.textColor = NSColor.secondaryLabelColor.withAlphaComponent(0.85)
-        saveHint.lineBreakMode = .byWordWrapping
-        saveHint.maximumNumberOfLines = 2
-        saveHint.preferredMaxLayoutWidth = 460
-        inner.addArrangedSubview(saveHint)
+        inner.addArrangedSubview(UIStyle.hint(
+            L10n.tr("保存位置:配置文件同目录下的 Presence-cap 子文件夹,只有无人判定触发锁屏时才写。", "Saved under the Presence-cap folder next to your config; written only when a no-face check triggers a lock."),
+            color: UIStyle.Palette.textSecondary.withAlphaComponent(0.85), maxWidth: 460, lines: 2
+        ))
 
-        inner.addArrangedSubview(separatorView())
+        let sep3 = separatorView()
+        inner.addArrangedSubview(sep3)
+        UIStyle.fillWidth(sep3, in: inner)
 
-        let note = NSTextField(labelWithString: L10n.tr(
+        inner.addArrangedSubview(UIStyle.hint(
+            L10n.tr(
             "说明:无操作满第 1 个秒数后开始开摄像头检测人脸;确认有人且仍无操作,每隔第 2 个秒数复查一次;一旦有操作重新累计第 1 个秒数。锁屏后看守休眠不再亮灯。锁屏后必须输密码或 Touch ID 才能进入,这是 macOS 安全限制,任何 App 都不能自动解锁。录屏占用摄像头时看守自动让路。",
             "After idle past the 1st value the camera checks your face; if you're there and still idle, it rechecks every (2nd value); any input restarts the 1st countdown. After locking the watch sleeps. After locking you must enter your password or Touch ID — macOS never lets apps unlock for you. The watch yields while recording uses the camera."
-        ))
-        note.font = .systemFont(ofSize: 11)
-        note.textColor = .secondaryLabelColor
-        note.lineBreakMode = .byWordWrapping
-        note.maximumNumberOfLines = 6
-        note.preferredMaxLayoutWidth = 460
-        inner.addArrangedSubview(note)
+        ), maxWidth: 460, lines: 6))
 
         let card = cardBox(containing: inner)
         stack.addArrangedSubview(card)
-        card.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-
-        tab.view = view
-        tabView.addTabViewItem(tab)
+        UIStyle.fillWidth(card, in: stack)
     }
 
     func reloadPresenceControls() {

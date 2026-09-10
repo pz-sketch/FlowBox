@@ -66,7 +66,7 @@ final class OCRResultWindow: NSPanel {
         let minHeight: CGFloat = 160
 
         // 预估文本高度
-        let font = NSFont.systemFont(ofSize: 13)
+        let font = UIStyle.Text.reading()
         let textWidth = width - 32
         let attr = [NSAttributedString.Key.font: font]
         let bounding = (text as NSString).boundingRect(
@@ -90,16 +90,17 @@ final class OCRResultWindow: NSPanel {
 
         let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: panelHeight))
         container.wantsLayer = true
-        container.layer?.backgroundColor = NSColor.white.cgColor
-        container.layer?.cornerRadius = 12
+        container.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        container.layer?.cornerRadius = UIStyle.Metrics.radiusL
+        container.layer?.cornerCurve = .continuous
         container.layer?.masksToBounds = true
         container.layer?.borderWidth = 1
-        container.layer?.borderColor = NSColor.black.withAlphaComponent(0.08).cgColor
+        container.layer?.borderColor = UIStyle.Palette.cardBorder.cgColor
 
         // 顶部提示
         let header = NSTextField(labelWithString: L10n.tr("已复制到剪贴板,可直接粘贴", "Copied to clipboard — paste anywhere"))
-        header.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        header.textColor = NSColor.secondaryLabelColor
+        header.font = UIStyle.Text.caption(.medium)
+        header.textColor = UIStyle.Palette.textSecondary
         header.frame = NSRect(x: 16, y: panelHeight - 28, width: width - 32, height: 14)
         header.alignment = .left
         container.addSubview(header)
@@ -111,14 +112,14 @@ final class OCRResultWindow: NSPanel {
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
         scroll.wantsLayer = true
-        scroll.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.04).cgColor
-        scroll.layer?.cornerRadius = 8
+        scroll.layer?.backgroundColor = UIStyle.Palette.inset.cgColor
+        scroll.layer?.cornerRadius = UIStyle.Metrics.radiusM
         scroll.drawsBackground = false
 
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: textWidth, height: textHeight))
         textView.string = text
         textView.font = font
-        textView.textColor = NSColor.labelColor
+        textView.textColor = UIStyle.Palette.text
         textView.backgroundColor = .clear
         textView.isEditable = true
         textView.isSelectable = true
@@ -136,17 +137,25 @@ final class OCRResultWindow: NSPanel {
 
         // 底部按钮:复制 / 关闭
         let btnCopy = NSButton(title: L10n.tr("复制", "Copy"), target: nil, action: nil)
-        btnCopy.bezelStyle = .rounded
+        btnCopy.bezelStyle = .inline
+        btnCopy.isBordered = false
         btnCopy.keyEquivalent = "\r"
         btnCopy.frame = NSRect(x: width - 160, y: 12, width: 72, height: 26)
         btnCopy.wantsLayer = true
-        btnCopy.layer?.cornerRadius = 8
+        btnCopy.layer?.cornerRadius = UIStyle.Metrics.radiusM
+        btnCopy.layer?.backgroundColor = UIStyle.Palette.accent.cgColor
+        btnCopy.attributedTitle = NSAttributedString(string: L10n.tr("复制", "Copy"), attributes: [
+            .font: UIStyle.Text.body(.medium),
+            .foregroundColor: NSColor.white,
+        ])
         container.addSubview(btnCopy)
 
         let btnClose = NSButton(title: L10n.tr("关闭", "Close"), target: nil, action: nil)
         btnClose.bezelStyle = .rounded
         btnClose.keyEquivalent = "\u{1b}"
         btnClose.frame = NSRect(x: width - 80, y: 12, width: 64, height: 26)
+        btnClose.wantsLayer = true
+        btnClose.layer?.cornerRadius = UIStyle.Metrics.radiusS
         container.addSubview(btnClose)
 
         contentView = container

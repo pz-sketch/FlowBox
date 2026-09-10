@@ -9,6 +9,9 @@
 dist/
 *.dmg
 
+# 本地临时编译产物(swiftc 不带 -o 时默认输出名为 main,容易误提交)
+/main
+
 # 本地笔记与 IDE 配置
 todo.md
 todo/

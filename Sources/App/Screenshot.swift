@@ -304,7 +304,7 @@ final class ScreenshotSession: NSObject {
 final class ToastWindow: NSPanel {
 
     static func show(text: String, at center: NSPoint) {
-        let font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        let font = UIStyle.Text.body(.medium)
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
         let textSize = (text as NSString).size(withAttributes: attrs)
         let padding: CGFloat = 18
@@ -313,8 +313,11 @@ final class ToastWindow: NSPanel {
 
         let container = NSView(frame: NSRect(x: 0, y: 0, width: boxW, height: boxH))
         container.wantsLayer = true
-        container.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
-        container.layer?.cornerRadius = 8
+        container.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.76).cgColor
+        container.layer?.cornerRadius = UIStyle.Metrics.radiusM
+        container.layer?.cornerCurve = .continuous
+        container.layer?.borderWidth = 1
+        container.layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
         let label = NSTextField(labelWithString: text)
         label.font = font
         label.textColor = .white
@@ -398,7 +401,7 @@ final class OverlayWindow: NSWindow {
 
 final class OverlayView: NSView {
 
-    enum Phase { case idle, selecting, annotating }
+    enum Phase { case idle, selecting, annotating, moving }
     enum Tool { case pen, mosaic, text, rect, ellipse }
 
     /// 一笔:折线点集 + 工具参数(坐标为视图顶左坐标系)
@@ -427,6 +430,11 @@ final class OverlayView: NSView {
     private(set) var strokes: [Stroke] = []
     private var currentStroke: Stroke?
     private var dragStart: CGPoint = .zero
+    /// 拖动移动选区:按下时的鼠标点与起始快照,拖拽中按「总位移」平移
+    /// (用快照而非增量累加,避免多次拖拽累积浮点误差)
+    private var moveStartPoint: CGPoint = .zero
+    private var moveOriginRect: CGRect = .zero
+    private var moveOriginStrokes: [Stroke] = []
     /// 文字输入浮层(存在时=正在输入)
     private var textInput: TextInputField?
     var isTextInputActive: Bool { textInput != nil }
@@ -660,13 +668,24 @@ final class OverlayView: NSView {
         }
         if let sel = selectionRect, sel.width >= 8, sel.height >= 8 {
             if sel.contains(p) {
-                NSCursor.crosshair.set()
+                if phase == .moving {
+                    NSCursor.closedHand.set()  // 拖动中:抓紧
+                } else if canMoveSelection {
+                    NSCursor.openHand.set()  // 可拖动移动选区
+                } else {
+                    NSCursor.crosshair.set()  // 已选工具:在选区内落笔
+                }
             } else {
                 NSCursor.arrow.set()
             }
             return
         }
         NSCursor.crosshair.set()
+    }
+
+    /// 当前是否处于「拖动移动选区」手势:未选工具,或按住 ⌥ 强制移动(选了工具也能挪框)
+    private var canMoveSelection: Bool {
+        tool == nil || NSEvent.modifierFlags.contains(.option)
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -696,7 +715,7 @@ final class OverlayView: NSView {
                 addCursorRect(tbRect, cursor: .arrow)
                 for b in buttons { addCursorRect(b.rect, cursor: .pointingHand) }
             }
-            addCursorRect(sel, cursor: .crosshair)
+            addCursorRect(sel, cursor: canMoveSelection ? .openHand : .crosshair)
             if sel.minY > 0 {
                 addCursorRect(NSRect(x: 0, y: 0, width: bounds.width, height: sel.minY), cursor: .arrow)
             }
@@ -742,7 +761,11 @@ final class OverlayView: NSView {
             return
         }
         if let sel = selectionRect, sel.insetBy(dx: -4, dy: -4).contains(p) {
-            // 未选工具时,选区内点击不落笔(需先点工具条)
+            // 未选工具(或按住 ⌥)时,在选区内拖动 = 平移整个选区,标注随之移动
+            if canMoveSelection {
+                beginMovingSelection(at: p, from: sel)
+                return
+            }
             guard let currentTool = tool else { return }
             if currentTool == .text {
                 beginTextInput(at: p)
@@ -791,6 +814,9 @@ final class OverlayView: NSView {
             } else {
                 currentStroke?.points.append(p)
             }
+        case .moving:
+            applySelectionMove(to: p)
+            updateCursor(at: p)  // 拖动过程中保持「抓紧」光标
         default:
             break
         }
@@ -849,9 +875,53 @@ final class OverlayView: NSView {
                 shotDebugLog("一笔完成: tool=\(name) 点数=\(stroke.points.count) 宽=\(Int(stroke.width))")
             }
             currentStroke = nil
+        case .moving:
+            // 选区已确认,回到标注态(与框选结束一致)
+            phase = .annotating
+            if let sel = selectionRect {
+                shotDebugLog("移动选区至 (\(Int(sel.minX)), \(Int(sel.minY))) 尺寸 \(Int(sel.width))x\(Int(sel.height))")
+            }
+            window?.invalidateCursorRects(for: self)
         default:
             break
         }
+        needsDisplay = true
+    }
+
+    // MARK: 拖动移动选区
+
+    /// 进入拖动移动:记录起点与快照,标注一并平移
+    /// (导出时按选区原点裁切,标注不同步就会错位)
+    private func beginMovingSelection(at p: CGPoint, from rect: CGRect) {
+        endTextInput(confirm: true)  // 正在输入文字则先落笔,避免浮层留在原地
+        phase = .moving
+        moveStartPoint = p
+        moveOriginRect = rect
+        moveOriginStrokes = strokes
+        currentStroke = nil
+        NSCursor.closedHand.set()
+        window?.invalidateCursorRects(for: self)
+        needsDisplay = true
+    }
+
+    /// 按鼠标总位移平移选区与全部标注,并夹在屏幕内
+    private func applySelectionMove(to p: CGPoint) {
+        guard phase == .moving else { return }
+        let delta = SelectionGeometry.clampedDelta(
+            rect: moveOriginRect,
+            bounds: bounds,
+            dx: p.x - moveStartPoint.x,
+            dy: p.y - moveStartPoint.y
+        )
+        let newRect = SelectionGeometry.offset(moveOriginRect, by: delta)
+        guard newRect != selectionRect else { return }  // 无实际位移则不重绘
+        selectionRect = newRect
+        strokes = moveOriginStrokes.map { stroke in
+            var moved = stroke
+            moved.points = SelectionGeometry.offset(stroke.points, by: delta)
+            return moved
+        }
+        window?.invalidateCursorRects(for: self)
         needsDisplay = true
     }
 
@@ -1008,8 +1078,11 @@ final class OverlayView: NSView {
                 ctx.setLineWidth(1)
                 ctx.stroke(r)
             }
-            // 尺寸标签(选区上方,越界时移入选区内)
-            let text = L10n.tr("尺寸 \(Int(sel.width)) × \(Int(sel.height))", "Size \(Int(sel.width)) × \(Int(sel.height))")
+            // 尺寸标签(选区上方,越界时移入选区内);未选工具时附带「可拖动」提示
+            var text = L10n.tr("尺寸 \(Int(sel.width)) × \(Int(sel.height))", "Size \(Int(sel.width)) × \(Int(sel.height))")
+            if tool == nil {
+                text += L10n.tr("  ·  拖动可移动", "  ·  Drag to move")
+            }
             drawLabel(text, at: NSPoint(x: sel.minX, y: max(4, sel.minY - 26)))
             // 工具条
             drawToolbar()

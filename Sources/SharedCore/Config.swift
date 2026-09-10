@@ -297,12 +297,17 @@ public struct RecordingConfig: Codable, Equatable {
     public var cameraIsCircle = true
     /// 摄像头是否镜像(前置常用)
     public var cameraMirrored = true
+    /// 录屏转 GIF:上次使用的帧率(2~15,面板记忆)
+    public var gifFps: Int = 10
+    /// 录屏转 GIF:上次使用的最大宽度,0 = 原始尺寸(面板记忆)
+    public var gifMaxWidth: Int = 960
 
     public init() {}
 
     enum CodingKeys: String, CodingKey {
         case hotKeyCode, hotKeyModifiers, captureSystemAudio, captureMicrophone, frameRate,
-             captureCamera, cameraWidth, cameraX, cameraY, cameraIsCircle, cameraMirrored
+             captureCamera, cameraWidth, cameraX, cameraY, cameraIsCircle, cameraMirrored,
+             gifFps, gifMaxWidth
     }
 
     public init(from decoder: Decoder) throws {
@@ -318,6 +323,8 @@ public struct RecordingConfig: Codable, Equatable {
         cameraY = try c.decodeIfPresent(Double.self, forKey: .cameraY) ?? -1
         cameraIsCircle = try c.decodeIfPresent(Bool.self, forKey: .cameraIsCircle) ?? true
         cameraMirrored = try c.decodeIfPresent(Bool.self, forKey: .cameraMirrored) ?? true
+        gifFps = try c.decodeIfPresent(Int.self, forKey: .gifFps) ?? 10
+        gifMaxWidth = try c.decodeIfPresent(Int.self, forKey: .gifMaxWidth) ?? 960
     }
 }
 

@@ -43,6 +43,7 @@ It is built with Swift and Apple-native frameworks rather than Electron. It is d
 | **Finder context menu** | Copy folder or selection paths, open the current folder in Terminal, and create files from templates. |
 | **Screenshot & annotation** | Freeze the screen, select an area, then use pen, mosaic, text, rectangle, ellipse, and undo; copy PNG or save it to the Desktop. |
 | **Screen recording** | Record the main display to `.mov`, with optional system audio, microphone, and camera PiP. |
+| **Recording → GIF** | Convert a recording (or any mov/mp4) to an animated GIF via menu bar → Recording → GIF…, with adjustable frame rate and width; runs fully on-device. |
 | **Camera PiP** | Preview before recording; drag it into position and configure circle/rectangle shape, size, mirroring, and position persistence. |
 | **Mouse wheel controls** | Reverse external mouse wheel direction and smooth discrete wheel events while leaving trackpad events unchanged. |
 | **Menu bar hider** | Put status icons pushed out by a notch or limited space into an expandable overflow menu. |
@@ -216,8 +217,9 @@ FlowBox 把一组高频 macOS 操作放进一个轻量菜单栏应用：Finder �
 | 模块 | 能做什么 |
 | --- | --- |
 | **Finder 右键菜单** | 复制当前目录路径、复制所选文件路径、在 Terminal 中打开目录、从模板新建文件。 |
-| **截图与标注** | 冻结屏幕、框选区域，使用画笔、马赛克、文字、矩形、椭圆和撤销；复制 PNG 或保存到桌面。 |
+| **截图与标注** | 冻结屏幕、框选区域，拖动移动选区，使用画笔、马赛克、文字、矩形、椭圆和撤销；复制 PNG 或保存到桌面。 |
 | **屏幕录制** | 录制主屏幕并保存为 `.mov`；可选系统声音、麦克风和摄像头画中画。 |
+| **录屏转 GIF** | 把录屏（或任意 mov/mp4）转成动图 GIF：菜单栏 →「录屏转 GIF…」，可调帧率与最大宽度，全程本机处理；完成后直接弹出 Quick Look 播放动画（无需去 Finder 双击）。 |
 | **摄像头画中画** | 录制前即可预览；支持拖动、圆形/矩形、尺寸、镜像和位置记忆。 |
 | **鼠标滚轮增强** | 反转外接鼠标滚轮方向，并将离散滚轮事件转换为更连续的滚动；触控板事件保持不变。 |
 | **菜单栏收纳** | 将被刘海或空间限制挤出的状态图标放入可展开的收纳菜单。 |
@@ -227,7 +229,7 @@ FlowBox 把一组高频 macOS 操作放进一个轻量菜单栏应用：Finder �
 
 - 截图默认快捷键：`⌥A`
 - 录屏默认快捷键：`⌥R`
-- 截图中：`Enter` 复制结果，`Esc` 取消，`⌘Z` 撤销，`⌘S` 保存 PNG
+- 截图中：`Enter` 复制结果，`Esc` 取消，`⌘Z` 撤销，`⌘S` 保存 PNG；未选绘制工具时在选区内拖动可移动整个选区（选了工具后按住 `⌥` 拖动同样可移动）
 - 所有快捷键和工具选项都可以在菜单栏图标 → **设置…** 中修改
 
 ### 安装方式

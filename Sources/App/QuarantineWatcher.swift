@@ -20,7 +20,7 @@ enum QuarantineHelper {
     @discardableResult
     static func runXattr(path: String) -> Bool {
         // 先试普通权限
-        var proc = Process()
+        let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
         proc.arguments = ["-dr", "com.apple.quarantine", path]
         do {

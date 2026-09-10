@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import SharedCore
 
 var passed = 0, failed = 0
@@ -170,6 +171,93 @@ do {
     var cfg=RecordingConfig(); cfg.cameraX = -1
     let l=pipLayout(cfg:cfg,W:3440,H:1440,scale:2)
     check(l.x+CGFloat(l.w)<3440 && l.y>0, "notch bounds")
+}
+// GifPlan 录屏转 GIF 纯计算
+do {
+    let p=GifEncodePlan(fps:10,maxWidth:960,sourceW:2880,sourceH:1800,duration:10)!
+    checkEq(p.frameCount, 100, "gif basic frameCount")
+    checkEq(p.delayCS, 10, "gif basic delayCS")
+    checkEq(p.outW, 960, "gif basic outW")
+    checkEq(p.outH, 600, "gif basic outH")
+    checkNear(p.frameTimes.last ?? 0, 9.9, "gif basic last time")
+    let hi=GifEncodePlan(fps:60,maxWidth:960,sourceW:1920,sourceH:1080,duration:2)!
+    checkEq(hi.delayCS, 7, "gif fps60 clamped delay 7cs")
+    checkEq(hi.frameCount, 30, "gif fps60 clamped count 2s*15")
+    let lo=GifEncodePlan(fps:1,maxWidth:960,sourceW:1920,sourceH:1080,duration:4)!
+    checkEq(lo.delayCS, 50, "gif fps1 clamped delay 50cs")
+    let a=GifEncodePlan(fps:10,maxWidth:0,sourceW:1440,sourceH:900,duration:5)!
+    check(a.outW==1440 && a.outH==900, "gif width0 keeps original")
+    let tiny=GifEncodePlan(fps:10,maxWidth:100,sourceW:1921,sourceH:1081,duration:3)!
+    checkEq(tiny.outW, 160, "gif minWidth floor 160")
+    check(tiny.outW%2==0 && tiny.outH%2==0, "gif even dims")
+    check(GifEncodePlan(fps:10,maxWidth:960,sourceW:0,sourceH:100,duration:5)==nil, "gif invalid sourceW nil")
+    check(GifEncodePlan(fps:10,maxWidth:960,sourceW:100,sourceH:100,duration:0)==nil, "gif invalid duration nil")
+    let sh=GifEncodePlan(fps:15,maxWidth:480,sourceW:1920,sourceH:1080,duration:0.05)!
+    checkEq(sh.frameCount, 1, "gif short video 1 frame")
+    checkEq(GifEncodePlan.gifFileName(forVideoName:"录屏 2026-09-10 143000.mov"), "录屏 2026-09-10 143000.gif", "gif filename mapping")
+    // 旧配置兼容:缺 gif 字段时回落默认值
+    let legacy=#"{"recording":{"frameRate":30}}"#.data(using:.utf8)!
+    let lc=try! JSONDecoder().decode(AppConfig.self, from:legacy)
+    checkEq(lc.recording.gifFps, 10, "gif legacy config default fps")
+    checkEq(lc.recording.gifMaxWidth, 960, "gif legacy config default width")
+}
+// preferredTransform 尺寸校正:竖拍视频若只用 naturalSize 会被拉伸
+do {
+    let nat=CGSize(width:640,height:360)
+    let id=GifEncodePlan.orientedSize(natural:nat,transform:.identity)
+    check(id.width==640 && id.height==360, "gif oriented identity 640x360 (got \(id.width)x\(id.height))")
+    let r90=GifEncodePlan.orientedSize(natural:nat,transform:CGAffineTransform(rotationAngle:.pi/2))
+    check(r90.width==360 && r90.height==640, "gif oriented 90deg → 360x640 (got \(r90.width)x\(r90.height))")
+    let r270=GifEncodePlan.orientedSize(natural:nat,transform:CGAffineTransform(rotationAngle:-.pi/2))
+    check(r270.width==360 && r270.height==640, "gif oriented -90deg → 360x640 (got \(r270.width)x\(r270.height))")
+    let r180=GifEncodePlan.orientedSize(natural:nat,transform:CGAffineTransform(rotationAngle:.pi))
+    check(r180.width==640 && r180.height==360, "gif oriented 180deg → 640x360 (got \(r180.width)x\(r180.height))")
+    // 校正后再算 plan:竖拍 360x640 → 宽 320 时高 568,宽高比保持(不是被压成 320x180)
+    let p=GifEncodePlan(fps:10,maxWidth:320,sourceW:r90.width,sourceH:r90.height,duration:2)!
+    check(p.outW==320 && p.outH==568, "gif portrait plan 320x568 (got \(p.outW)x\(p.outH))")
+    let bad=GifEncodePlan(fps:10,maxWidth:320,sourceW:640,sourceH:360,duration:2)!
+    check(bad.outH != p.outH, "gif unrotated vs rotated plans differ (regression guard)")
+}
+
+// 截图选区拖动:位移夹取 + 矩形/顶点同步平移
+do {
+    let bounds = CGRect(x: 0, y: 0, width: 1000, height: 800)
+    let rect = CGRect(x: 100, y: 100, width: 200, height: 150)
+
+    // 界内正常平移
+    let inRange = SelectionGeometry.clampedDelta(rect: rect, bounds: bounds, dx: 50, dy: -30)
+    checkEq(inRange, CGPoint(x: 50, y: -30), "selection delta in range")
+    let movedInRange = SelectionGeometry.offset(rect, by: inRange)
+    checkEq(movedInRange, CGRect(x: 150, y: 70, width: 200, height: 150), "selection rect offset in range")
+
+    // 四向超界夹取(选区尺寸保持不变)
+    let rMax = SelectionGeometry.clampedDelta(rect: rect, bounds: bounds, dx: 9999, dy: 9999)
+    checkEq(rMax, CGPoint(x: 700, y: 550), "selection delta clamped to right/bottom")
+    let rMin = SelectionGeometry.clampedDelta(rect: rect, bounds: bounds, dx: -9999, dy: -9999)
+    checkEq(rMin, CGPoint(x: -100, y: -100), "selection delta clamped to left/top")
+
+    // 夹取后必然完整落在屏幕内,且尺寸不变
+    for d in [CGPoint(x: 9999, y: 9999), CGPoint(x: -9999, y: -9999), CGPoint(x: 500, y: -400), CGPoint(x: 12, y: 7)] {
+        let delta = SelectionGeometry.clampedDelta(rect: rect, bounds: bounds, dx: d.x, dy: d.y)
+        let moved = SelectionGeometry.offset(rect, by: delta)
+        check(bounds.contains(moved), "selection stays in bounds for desired \(d) → \(delta)")
+        checkEq(moved.size, rect.size, "selection size unchanged for desired \(d)")
+    }
+
+    // 退化:选区比屏幕还大 → 零位移,不允许乱滑
+    let huge = CGRect(x: -20, y: -20, width: 1200, height: 900)
+    let degenerate = SelectionGeometry.clampedDelta(rect: huge, bounds: bounds, dx: 100, dy: 100)
+    checkEq(degenerate, .zero, "oversized selection yields zero delta")
+
+    // 标注顶点与选区共用同一位移,相对位置保持不变
+    let points = [CGPoint(x: 120, y: 130), CGPoint(x: 260, y: 210)]
+    let shifted = SelectionGeometry.offset(points, by: CGPoint(x: 50, y: -30))
+    checkEq(shifted, [CGPoint(x: 170, y: 100), CGPoint(x: 310, y: 180)], "annotation points shifted with selection")
+    let relativeBefore = CGPoint(x: points[0].x - rect.minX, y: points[0].y - rect.minY)
+    let relativeAfter = CGPoint(x: shifted[0].x - movedInRange.minX, y: shifted[0].y - movedInRange.minY)
+    checkEq(relativeAfter, relativeBefore, "annotation keeps position relative to selection")
+    let untouched = SelectionGeometry.offset(points, by: .zero)
+    checkEq(untouched, points, "zero delta leaves annotation points untouched")
 }
 
 print("\n=== Result: \(passed) passed, \(failed) failed ===")

@@ -38,7 +38,9 @@ func presenceDebugLog(_ message: String) {
 @MainActor
 final class PresenceMonitor: NSObject {
 
-    static let shared = PresenceMonitor()
+    /// 单例。`static let` 本身由 swift_once 保证线程安全;标 nonisolated 是为了让
+    /// 非隔离上下文(设置页)能直接取用只读快照 isEnrolling —— 它本就是为此设计的。
+    nonisolated static let shared = PresenceMonitor()
 
     /// 看守状态(供菜单与设置页展示)
     enum WatchState: Equatable {
@@ -107,7 +109,7 @@ final class PresenceMonitor: NSObject {
     /// 单次摄像头确认的最长时长(秒),超时无结果视为无人
     private let confirmWindow: TimeInterval = 5
 
-    private override init() {
+    private nonisolated override init() {
         super.init()
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(
@@ -243,12 +245,14 @@ final class PresenceMonitor: NSObject {
             guard let self else { t.invalidate(); return }
             Task { @MainActor in
                 guard self.state == .enrolling else { t.invalidate(); return }
-                self.confirmLock.lock()
-                let finishing = self.enrollFinishing
-                let timedOut = Date() > self.enrollDeadline
-                let count = self.enrollSamples?.count ?? 0
-                if timedOut, !finishing { self.enrollFinishing = true }
-                self.confirmLock.unlock()
+                // 作用域锁:裸 lock()/unlock() 在 async 上下文已被标记不可用(Swift 6 起为错误)
+                let (finishing, timedOut, count) = self.confirmLock.withLock {
+                    let finishing = self.enrollFinishing
+                    let timedOut = Date() > self.enrollDeadline
+                    let count = self.enrollSamples?.count ?? 0
+                    if timedOut, !finishing { self.enrollFinishing = true }
+                    return (finishing, timedOut, count)
+                }
                 if finishing {
                     // 采集侧已触发收尾,本轮询只停表
                     t.invalidate()

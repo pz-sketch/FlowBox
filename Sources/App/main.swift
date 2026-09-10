@@ -100,6 +100,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordingItem = menuItem(L10n.tr("录屏", "Recording"), symbol: "record.circle", action: #selector(toggleRecording))
         menu.addItem(recordingItem)
 
+        menu.addItem(menuItem(L10n.tr("录屏转 GIF…", "Recording → GIF…"), symbol: "photo.on.rectangle.angled", action: #selector(convertRecordingToGif)))
+
         menu.addItem(menuItem(L10n.tr("去隔离…", "De-Quarantine…"), symbol: "checkmark.shield", action: #selector(openQuarantinePanel)))
         menu.addItem(menuItem(L10n.tr("设置…", "Settings…"), symbol: "gearshape", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(menuItem(L10n.tr("打开配置文件(JSON)", "Open Config (JSON)"), symbol: "doc.text", action: #selector(openConfig)))
@@ -168,6 +170,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in ScreenRecorder.shared.toggle() }
     }
 
+    @objc private func convertRecordingToGif() {
+        Task { @MainActor in GifConverter.shared.pickAndConvert() }
+    }
+
     @objc private func openQuarantinePanel() {
         QuarantinePanel.shared.show()
     }
@@ -195,6 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         2. 功能:复制当前目录路径 / 复制所选文件路径 / 在终端中打开 / 新建文件
         3. 按快捷键(默认 ⌥A)框选截图:画笔 / 马赛克标注后 Enter 复制到剪贴板
         4. 点击菜单栏图标 →「设置…」可自定义功能、模板与截图快捷键,改动即时生效
+        5. 菜单栏 →「录屏转 GIF…」可把录屏 .mov(或任意 mov/mp4)转成 GIF,帧率/宽度可选
 
         首次使用「在终端中打开」时,系统会弹一次「控制 Terminal」的授权,允许即可。
         首次截屏需授权「屏幕录制」,授权后重启本应用生效。
