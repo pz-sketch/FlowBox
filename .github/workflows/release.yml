@@ -1,0 +1,133 @@
+name: Release FlowBox
+
+# 打 tag(v*) 自动构建 DMG 并发布 GitHub Release；
+# 手动触发只打包 + 上传 artifact，不发 release(用于验证签名链路)。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Select latest Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer || true
+
+      # 先卡版本：tag 必须与 build.sh / dist.sh 里的 VERSION 一致，避免发错版本
+      - name: Check version matches tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          DIST_VER=$(grep -E '^VERSION=' dist.sh | head -1 | cut -d'"' -f2)
+          BUILD_VER=$(grep -E '^VERSION=' build.sh | head -1 | cut -d'"' -f2)
+          TAG_VER="${GITHUB_REF_NAME#v}"
+          echo "tag=${TAG_VER}  dist.sh=${DIST_VER}  build.sh=${BUILD_VER}"
+          if [ "${TAG_VER}" != "${DIST_VER}" ] || [ "${TAG_VER}" != "${BUILD_VER}" ]; then
+            echo "::error title=版本不一致::tag 为 ${TAG_VER}，但 dist.sh=${DIST_VER} / build.sh=${BUILD_VER}"
+            exit 1
+          fi
+
+      # 导入签名证书：FlowBoxDeveloper 是自签名证书(本地也是 CSSMERR_TP_NOT_TRUSTED)，
+      # 本地能签成功就说明 codesign 不要求系统信任，CI 同理，无需 add-trusted-cert。
+      - name: Import signing certificate
+        env:
+          CERT_P12_BASE64: ${{ secrets.FLOWBOX_CERT_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.FLOWBOX_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.FLOWBOX_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CERT_P12_BASE64}" ]; then
+            echo "::warning title=缺少签名证书::secrets 中没有 FLOWBOX_CERT_P12_BASE64，dist.sh 将回退 ad-hoc 签名，产物不可对外分发。"
+            exit 0
+          fi
+          CERT_PATH="$RUNNER_TEMP/flowbox-sign.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/flowbox-signing.keychain-db"
+          echo "${CERT_P12_BASE64}" | base64 --decode > "${CERT_PATH}"
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security import "${CERT_PATH}" -P "${P12_PASSWORD}" -A -t cert -f pkcs12 -k "${KEYCHAIN_PATH}"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}" >/dev/null
+          security list-keychain -d user -s "${KEYCHAIN_PATH}" login.keychain-db
+          rm -f "${CERT_PATH}"
+          echo "--- 可用签名身份 ---"
+          security find-identity "${KEYCHAIN_PATH}"
+
+      - name: Build DMG
+        run: ./dist.sh
+
+      # 门禁：产物必须是固定证书签名，ad-hoc 一律拦下不发
+      - name: Verify DMG signature
+        run: |
+          set -uo pipefail
+          APP="/Volumes/FlowBox/FlowBox.app"
+          hdiutil detach /Volumes/FlowBox >/dev/null 2>&1 || true
+          hdiutil attach dist/FlowBox.dmg -nobrowse >/dev/null
+          trap 'hdiutil detach /Volumes/FlowBox >/dev/null 2>&1 || true' EXIT
+
+          echo "=== 主 app 签名 ==="
+          SIGN_INFO=$(codesign -dv --verbose=4 "${APP}" 2>&1 || true)
+          echo "${SIGN_INFO}"
+          echo "=== 签名完整性校验 ==="
+          codesign --verify --verbose=2 "${APP}" 2>&1 || true
+          echo "=== 扩展签名 ==="
+          codesign -dv --verbose=2 "${APP}/Contents/PlugIns/FlowBoxExt.appex" 2>&1 | head -6 || true
+
+          echo "=== 版本 ==="
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${APP}/Contents/Info.plist"
+          echo -n "扩展: "
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${APP}/Contents/PlugIns/FlowBoxExt.appex/Contents/Info.plist"
+
+          if grep -q "Signature=adhoc" <<<"${SIGN_INFO}"; then
+            echo "::error title=签名无效::产物是 ad-hoc 签名，不可对外分发，已阻止发布。"
+            exit 1
+          fi
+          echo "✅ 已用固定证书签名，可以分发"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlowBox-dmg-${{ github.ref_name }}
+          path: dist/FlowBox.dmg
+          retention-days: 14
+
+      - name: Prepare release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        id: notes
+        run: |
+          set -euo pipefail
+          NOTES=".github/release-notes/${GITHUB_REF_NAME}.md"
+          if [ -f "${NOTES}" ]; then
+            echo "path=${NOTES}" >> "$GITHUB_OUTPUT"
+          else
+            printf '## FlowBox %s\n\n本次改动详见仓库提交记录。\nSee the commit history for the changes in this release.\n' "${GITHUB_REF_NAME}" > "$RUNNER_TEMP/notes.md"
+            echo "path=$RUNNER_TEMP/notes.md" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          NOTES="${{ steps.notes.outputs.path }}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "release ${TAG} 已存在，仅覆盖上传 DMG"
+            gh release upload "${TAG}" dist/FlowBox.dmg --clobber
+          else
+            gh release create "${TAG}" \
+              --title "FlowBox ${TAG}" \
+              --notes-file "${NOTES}" \
+              --target "${GITHUB_SHA}" \
+              dist/FlowBox.dmg
+          fi
+          echo "--- 发布结果 ---"
+          gh release view "${TAG}" --json tagName,name,url,assets
