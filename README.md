@@ -195,6 +195,47 @@ dist.sh                     Build and package a local DMG
 - Camera picture-in-picture is composited into the local recording
 - SwiftPM builds the targets; shell scripts assemble the `.app`, embed the extension, and sign it
 
+### Releasing
+
+The version lives in two places — `build.sh` and `dist.sh` — and both must agree.
+
+```bash
+# 1. bump VERSION in build.sh and dist.sh, then commit and push
+# 2. tag it — CI builds, signs and publishes from there
+git tag v1.0.2 && git push origin v1.0.2
+```
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the DMG,
+verifies it carries the fixed `FlowBoxDeveloper` signature (an ad-hoc build fails
+the run rather than shipping), and publishes a GitHub Release with the DMG attached.
+Release notes are read from `.github/release-notes/<tag>.md` when that file exists.
+
+Running the workflow manually (Actions → Release FlowBox → Run workflow) builds and
+uploads the DMG as a workflow artifact **without** publishing a release — use that to
+verify the signing chain on its own.
+
+The workflow expects three repository secrets:
+
+| Secret | Contents |
+| --- | --- |
+| `FLOWBOX_CERT_P12_BASE64` | base64 of the `FlowBoxDeveloper` certificate **with its private key**, exported as `.p12` |
+| `FLOWBOX_P12_PASSWORD` | the passphrase that `.p12` was exported with |
+| `FLOWBOX_KEYCHAIN_PASSWORD` | any throwaway string; unlocks the temporary keychain on the runner |
+
+To re-export the certificate (it is self-signed and never trusted by the system, so
+`find-identity -v` reports zero valid identities — that is expected):
+
+```bash
+security export -k ~/Library/Keychains/login.keychain-db \
+  -t identities -f pkcs12 -o /tmp/flowbox-sign.p12 -P '<passphrase>'
+base64 -i /tmp/flowbox-sign.p12 | pbcopy   # paste into FLOWBOX_CERT_P12_BASE64
+rm -f /tmp/flowbox-sign.p12                # do not leave the private key on disk
+```
+
+> The certificate must stay the same across releases. Rotating it changes the app's
+> designated requirement, and macOS then treats the update as a different app and
+> resets the permissions users had granted.
+
 
 ---
 
@@ -370,6 +411,44 @@ dist.sh                     Build and package a local DMG
 - 截图和录屏分别使用 ScreenCaptureKit、AVFoundation 和系统图形能力
 - 录屏中的摄像头画中画由本地视频合成
 - SwiftPM 负责编译，脚本负责组装 `.app`、嵌入扩展和签名
+
+### 发版流程
+
+版本号写在**两个地方** —— `build.sh` 和 `dist.sh`，必须一致。
+
+```bash
+# 1. 改 build.sh / dist.sh 里的 VERSION，提交并推送
+# 2. 打 tag 推上去，剩下的交给 CI
+git tag v1.0.2 && git push origin v1.0.2
+```
+
+推送 `v*` tag 会触发 `.github/workflows/release.yml`：构建 DMG → 校验使用的是固定证书
+`FlowBoxDeveloper` 签名（若是 ad-hoc 签名会**直接让这次运行失败**，不会把不合格的包发出去）
+→ 创建 GitHub Release 并挂上 DMG。发布说明取自 `.github/release-notes/<tag>.md`（存在时）。
+
+手动运行该工作流（Actions → Release FlowBox → Run workflow）只构建并上传 DMG 作为 workflow
+artifact，**不发 release** —— 用它单独验证签名链路是否正常。
+
+工作流依赖三个仓库 secrets：
+
+| Secret | 内容 |
+| --- | --- |
+| `FLOWBOX_CERT_P12_BASE64` | `FlowBoxDeveloper` 证书**连同私钥**导出为 `.p12` 后的 base64 |
+| `FLOWBOX_P12_PASSWORD` | 导出该 `.p12` 时设置的密码 |
+| `FLOWBOX_KEYCHAIN_PASSWORD` | 任意临时字符串，用于解锁 runner 上的临时钥匙串 |
+
+重新导出证书（它是自签名证书，系统从不信任它，所以 `find-identity -v` 显示 0 个有效身份，
+这是正常的）：
+
+```bash
+security export -k ~/Library/Keychains/login.keychain-db \
+  -t identities -f pkcs12 -o /tmp/flowbox-sign.p12 -P '<密码>'
+base64 -i /tmp/flowbox-sign.p12 | pbcopy   # 粘贴进 FLOWBOX_CERT_P12_BASE64
+rm -f /tmp/flowbox-sign.p12                # 别把私钥留在磁盘上
+```
+
+> 证书必须**保持同一把**。换证书会改变应用的指定要求（designated requirement），macOS 会把
+> 新版本当成另一个应用，用户之前授予的权限会被重置。
 
 ---
 
