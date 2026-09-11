@@ -19,6 +19,8 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
     private var hiddenCacheDate: Date?
     private var posCache: [PosEntry]?; private var posCacheDate: Date?
     private var iconCache: [String:(String,NSImage?)] = [:]
+    /// 上一轮「主屏状态项窗口号」全集,用于识别显示拓扑瞬变(见 buildHiddenList 内的零交集检查)
+    private var lastMainWinIDs: Set<Int> = []
     /// 状态项窗口缩略图缓存(键 = 窗口号)。
     ///
     /// ⚠️ 不要用 `CGWindowListCreateImage`:它在 macOS 15 起被标记 obsoleted,在 macOS 26 上
@@ -427,13 +429,35 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
         }
     }
 
+    // MARK: - 主屏锚定
+
+    private static func displayID(of screen: NSScreen) -> CGDirectDisplayID? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+    }
+
+    /// 「被挤判定屏」—— 菜单栏收纳的语义锚点,与用户在哪块屏上工作无关。
+    ///
+    /// 优先选**带刘海的屏**(`auxiliaryTopLeft/RightArea` 非空):只有刘海/安全区会把状态项
+    /// 挤出可视区,这正是要收纳的对象;全部屏都无刘海时退化用 AppKit 主屏(`screens.first`,
+    /// 文档保证对应带菜单栏的 primary screen)。
+    /// ⚠️ 不能用 `CGMainDisplayID()`:实测它跟随键盘焦点所在屏 —— 用户在双屏间工作时
+    /// 每轮采样都会跳变(2026-09-11 实测 5 分钟 28 次),外接屏镜像会被整批当成主屏窗口。
+    private static func mainScreen() -> NSScreen? {
+        let notched = NSScreen.screens.first { s in
+            if let r = s.auxiliaryTopRightArea, !r.isNull,
+               let l = s.auxiliaryTopLeftArea, !l.isNull { return true }
+            return false
+        }
+        return notched ?? NSScreen.screens.first
+    }
+
     /// 主屏菜单栏「可见状态项」的 X 区间(CG 坐标,原点左上但 X 与 Cocoa 同单位同向,已定标)。
     ///
     /// 刘海机型上菜单栏被刘海切成左右两段,中间那段是**物理不可见区** ——
     /// 被挤到那里的图标正是我们要收进下拉的「隐藏项」。所以可见区是两段而不是一整条。
     /// 拿不到刘海信息(无刘海屏)时退化成整条主屏宽度。
     private static func visibleStatusXRanges() -> [ClosedRange<CGFloat>] {
-        guard let main = NSScreen.screens.first else { return [] }
+        guard let main = mainScreen() else { return [] }
         let lo = main.frame.minX, hi = main.frame.maxX
         if let right = main.auxiliaryTopRightArea, !right.isNull,
            let left = main.auxiliaryTopLeftArea, !left.isNull {
@@ -447,10 +471,20 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
     /// macOS 会为同一批状态项在**每块屏**各渲染一份独立窗口(x 落在该屏范围内)。这些是镜像副本,
     /// 不是"被挤掉的隐藏项" —— 把它们也算进来,下拉里就会出现双份同名条目(用户报的「两个 QQ」)。
     private static func secondaryScreenXRanges() -> [ClosedRange<CGFloat>] {
-        NSScreen.screens.dropFirst().map { $0.frame.minX...$0.frame.maxX }
+        guard let mainID = mainScreen().flatMap(displayID(of:)) else { return [] }
+        return NSScreen.screens
+            .filter { displayID(of: $0) != mainID }
+            .map { $0.frame.minX...$0.frame.maxX }
     }
 
     private func buildHiddenList() -> [HiddenInfo] {
+        // 主屏锚定失败 = 屏幕列表瞬时异常(内置屏短暂离列表等)。此时任何几何判定都不可信:
+        // 空可见区会把全部窗口(含外接屏镜像)判成「隐藏」列进下拉,造成顶栏+下拉同名重复。
+        // 沿用上轮快照过渡,下一轮列表恢复后自然刷新。
+        guard Self.mainScreen() != nil else {
+            FlowLog.menuBar.info("主屏锚定失败(屏幕列表异常),沿用上轮快照 \(self.hiddenCache.count) 项")
+            return hiddenCache
+        }
         guard let list = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
         let ownNumbers: Set<Int> = [
             arrowItem?.button?.window?.windowNumber,
@@ -491,6 +525,17 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
         // 固定成菜单栏的视觉顺序(自右向左),不要直接吃 CGWindowList 的原始顺序 ——
         // 否则菜单条目顺序每次打开都可能不一样
         wins.sort { $0.x > $1.x }
+
+        // 防瞬变兜底:显示链路重协商的瞬间,main display(连带 CGMainDisplayID 与 NSScreen 顺序)
+        // 会短暂翻到外接屏再翻回。单轮采样恰好落在窗口内时,主屏锚定仍会拿到外接屏,
+        // 整列表变成「镜像当真身」。这种翻转的指纹是主屏窗口号集合与上轮**零交集** ——
+        // 自然状态不可能(开关一个图标只增删一两个窗口),据此识别并沿用上轮结果过渡。
+        let curMainIDs = Set(wins.map { $0.num })
+        if !lastMainWinIDs.isEmpty, curMainIDs.isDisjoint(with: lastMainWinIDs) {
+            FlowLog.menuBar.info("主屏窗口集与上轮零交集(显示拓扑瞬变),沿用上轮 \(self.hiddenCache.count) 项")
+            return hiddenCache
+        }
+        lastMainWinIDs = curMainIDs
 
         // 通用第三方 Item-0 用位置排序精确映射到应用名/图标;具名窗口(WiFi/Battery 等)直接用窗口名
         // 关键: 只保留"正在运行"的域参与映射 — 已退出应用在 defaults 里残留位置键,
@@ -736,8 +781,10 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
             if let b = w[kCGWindowBounds as String] as? [String: Any],
                let x = b["X"] as? CGFloat, let y = b["Y"] as? CGFloat,
                let wd = b["Width"] as? CGFloat, let ht = b["Height"] as? CGFloat {
-                // CG y 是从屏幕左上角算,需翻到 Cocoa 坐标再发 CGEvent
-                let screenH = NSScreen.screens.first?.frame.height ?? 900
+                // CG y 是从屏幕左上角算,需翻到 Cocoa 坐标再发 CGEvent。
+                // 高度基准用主屏(CG 全局坐标 y=0 即主屏顶),不能用 screens.first ——
+                // 顺序抖动时拿到外接屏高度,y 会整体偏移导致点错位置
+                let screenH = Self.mainScreen()?.frame.height ?? NSScreen.screens.first?.frame.height ?? 900
                 let pt = CGPoint(x: x + wd/2, y: screenH - (y + ht/2))
                 // 若仍不可见(仍被刘海挡),提示用户用"固定到右侧"
                 if x < 0 || x > 1600 {
