@@ -19,8 +19,9 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
     private var hiddenCacheDate: Date?
     private var posCache: [PosEntry]?; private var posCacheDate: Date?
     private var iconCache: [String:(String,NSImage?)] = [:]
-    /// 上一轮「主屏状态项窗口号」全集,用于识别显示拓扑瞬变(见 buildHiddenList 内的零交集检查)
-    private var lastMainWinIDs: Set<Int> = []
+    /// 每块屏上一轮「状态项窗口号」全集,用于识别显示拓扑瞬变(见 buildHiddenList 内的零交集检查)。
+    /// 按屏分桶:主屏轮询与副屏打开菜单是两套窗口集,混在一个桶里会互相误判成瞬变。
+    private var lastScreenWinIDs: [CGDirectDisplayID: Set<Int>] = [:]
     /// 窗口号 → 上次成功配到的身份。主屏匿名项的名字靠副屏镜像副本供给,副屏重连时那批
     /// 副本会整个重建(窗口号全换),重建完成前命名断供 —— 主屏窗口号此刻不变,用缓存顶着。
     private var identityCache: [CGWindowID: (title: String, bundleID: String?)] = [:]
@@ -161,10 +162,16 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
     /// 保证"展示所有"——绝不使用过期快照导致少一个应用
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        let hidden = buildHiddenList()
-        hiddenCache = hidden
-        hiddenCacheDate = Date()
+        // 下拉内容按「菜单在哪块屏弹出」计算(鼠标点箭头时必然在那一屏):
+        // 点副屏箭头就判定副屏的隐藏项 —— 副屏无刘海、图标全可见,若仍列主屏的隐藏项,
+        // 用户在副屏会看到「顶栏一份 + 下拉一份」的同名重复
+        let target = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
+        let hidden = buildHiddenList(target: target)
         cachedHidden = hidden
+        if target == nil || target == Self.mainScreen() {
+            hiddenCache = hidden
+            hiddenCacheDate = Date()
+        }
         if hidden.isEmpty {
             let text = L10n.tr("暂无被隐藏的图标(顶栏已全部可见)", "No hidden icons (all menu bar items are visible)")
             let row = MenuRowView(title: text, icon: nil, isEnabled: false)
@@ -334,6 +341,40 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
         var bundleID: String? = nil
     }
 
+    /// 对**可见**状态项做 AX hit-test,拿窗口真身(窗口号 → bundle id / menuextra 标识)。
+    ///
+    /// ⚠️ macOS 26 实测:坐标 x 与 CG 同向,但 y **从菜单栏顶部向下**算(≈16 即顶栏中线),
+    /// 与公开文档的 Cocoa 左下原点不符;刘海下的隐藏位命中的是当前 App 的菜单(拿不到状态项),
+    /// 所以只探测可见项 —— 它们正是给隐藏项校正身份的锚点(同宽组内两屏顺序相反时,
+    /// 纯顺序对齐会把身份对调,见 StatusItemPairing.reconcileAnchors)。
+    /// 无辅助功能权限 / 命中失败时对应项缺席,调用方按缺锚点降级(不改动配对)。
+    private static func axIdentities(_ visible: [(num: Int, x: CGFloat, width: CGFloat)]) -> [Int: String] {
+        let ax = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(ax, 0.8)
+        var out: [Int: String] = [:]
+        for w in visible {
+            var el: AXUIElement?
+            guard AXUIElementCopyElementAtPosition(ax, Float(w.x + w.width / 2), 16, &el) == .success,
+                  let e = el else { continue }
+            var pid: pid_t = 0
+            AXUIElementGetPid(e, &pid)
+            guard pid > 0,
+                  let app = NSRunningApplication(processIdentifier: pid),
+                  let bid = app.bundleIdentifier else { continue }
+            if bid == "com.apple.controlcenter" {
+                // 系统项(WiFi/Battery)pid 全是控制中心,AXIdentifier 才是区分键
+                var idRef: CFTypeRef?
+                if AXUIElementCopyAttributeValue(e, kAXIdentifierAttribute as CFString, &idRef) == .success,
+                   let ident = idRef as? String, !ident.isEmpty {
+                    out[w.num] = ident
+                }
+            } else {
+                out[w.num] = bid
+            }
+        }
+        return out
+    }
+
     private func hiddenStatusWindows() -> [HiddenInfo] { buildHiddenList() }
 
     // MARK: - 状态项缩略图(绕开已废弃的 CGWindowListCreateImage)
@@ -454,38 +495,40 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
         return notched ?? NSScreen.screens.first
     }
 
-    /// 主屏菜单栏「可见状态项」的 X 区间(CG 坐标,原点左上但 X 与 Cocoa 同单位同向,已定标)。
+    /// 目标屏菜单栏「可见状态项」的 X 区间(CG 坐标,原点左上但 X 与 Cocoa 同单位同向,已定标)。
     ///
     /// 刘海机型上菜单栏被刘海切成左右两段,中间那段是**物理不可见区** ——
     /// 被挤到那里的图标正是我们要收进下拉的「隐藏项」。所以可见区是两段而不是一整条。
-    /// 拿不到刘海信息(无刘海屏)时退化成整条主屏宽度。
-    private static func visibleStatusXRanges() -> [ClosedRange<CGFloat>] {
-        guard let main = mainScreen() else { return [] }
-        let lo = main.frame.minX, hi = main.frame.maxX
-        if let right = main.auxiliaryTopRightArea, !right.isNull,
-           let left = main.auxiliaryTopLeftArea, !left.isNull {
+    /// 拿不到刘海信息(无刘海屏)时退化成整条屏宽。
+    private static func visibleStatusXRanges(on screen: NSScreen) -> [ClosedRange<CGFloat>] {
+        let lo = screen.frame.minX, hi = screen.frame.maxX
+        if let right = screen.auxiliaryTopRightArea, !right.isNull,
+           let left = screen.auxiliaryTopLeftArea, !left.isNull {
             return [lo...left.maxX, right.minX...hi]
         }
         return [lo...hi]
     }
 
-    /// 非主屏(外接显示器)的 X 范围。
+    /// 非目标屏(如外接显示器)的 X 范围。
     ///
     /// macOS 会为同一批状态项在**每块屏**各渲染一份独立窗口(x 落在该屏范围内)。这些是镜像副本,
     /// 不是"被挤掉的隐藏项" —— 把它们也算进来,下拉里就会出现双份同名条目(用户报的「两个 QQ」)。
-    private static func secondaryScreenXRanges() -> [ClosedRange<CGFloat>] {
-        guard let mainID = mainScreen().flatMap(displayID(of:)) else { return [] }
+    private static func otherScreenXRanges(excluding target: NSScreen) -> [ClosedRange<CGFloat>] {
+        guard let tid = displayID(of: target) else { return [] }
         return NSScreen.screens
-            .filter { displayID(of: $0) != mainID }
+            .filter { displayID(of: $0) != tid }
             .map { $0.frame.minX...$0.frame.maxX }
     }
 
-    private func buildHiddenList() -> [HiddenInfo] {
-        // 主屏锚定失败 = 屏幕列表瞬时异常(内置屏短暂离列表等)。此时任何几何判定都不可信:
-        // 空可见区会把全部窗口(含外接屏镜像)判成「隐藏」列进下拉,造成顶栏+下拉同名重复。
+    /// - Parameter target: 下拉在哪块屏弹出就判定哪块屏的隐藏项(点副屏箭头 → 副屏语境);
+    ///   nil 表示默认语境(轮询预热用主屏)。
+    private func buildHiddenList(target: NSScreen? = nil) -> [HiddenInfo] {
+        let targetScreen = target ?? Self.mainScreen()
+        // 屏幕列表瞬时异常(所有屏都锚定不到)时,任何几何判定都不可信:
+        // 空可见区会把全部窗口(含镜像副本)判成「隐藏」列进下拉,造成顶栏+下拉同名重复。
         // 沿用上轮快照过渡,下一轮列表恢复后自然刷新。
-        guard Self.mainScreen() != nil else {
-            FlowLog.menuBar.info("主屏锚定失败(屏幕列表异常),沿用上轮快照 \(self.hiddenCache.count) 项")
+        guard let targetScreen = targetScreen else {
+            FlowLog.menuBar.info("目标屏锚定失败(屏幕列表异常),沿用上轮快照 \(self.hiddenCache.count) 项")
             return hiddenCache
         }
         guard let list = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
@@ -501,8 +544,8 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
         //
         // 但副屏那批**不能丢** —— autosaveName(窗口名)常常只落在其中一份上,它是主屏匿名项
         // 唯一的可靠身份来源,收进 `clones` 备用(见下方 crossScreenName)。
-        let visibleRanges = Self.visibleStatusXRanges()
-        let secondaryRanges = Self.secondaryScreenXRanges()
+        let visibleRanges = Self.visibleStatusXRanges(on: targetScreen)
+        let secondaryRanges = Self.otherScreenXRanges(excluding: targetScreen)
         struct Win { let num: Int; let x: CGFloat; let width: CGFloat; let winName: String; let isVisible: Bool }
         var wins: [Win] = []
         var clones: [Win] = []
@@ -529,16 +572,21 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
         // 否则菜单条目顺序每次打开都可能不一样
         wins.sort { $0.x > $1.x }
 
-        // 防瞬变兜底:显示链路重协商的瞬间,main display(连带 CGMainDisplayID 与 NSScreen 顺序)
-        // 会短暂翻到外接屏再翻回。单轮采样恰好落在窗口内时,主屏锚定仍会拿到外接屏,
-        // 整列表变成「镜像当真身」。这种翻转的指纹是主屏窗口号集合与上轮**零交集** ——
-        // 自然状态不可能(开关一个图标只增删一两个窗口),据此识别并沿用上轮结果过渡。
-        let curMainIDs = Set(wins.map { $0.num })
-        if !lastMainWinIDs.isEmpty, curMainIDs.isDisjoint(with: lastMainWinIDs) {
-            FlowLog.menuBar.info("主屏窗口集与上轮零交集(显示拓扑瞬变),沿用上轮 \(self.hiddenCache.count) 项")
-            return hiddenCache
+        // 防瞬变兜底:显示链路重协商的瞬间,目标屏锚定会短暂翻到另一块屏再翻回。
+        // 单轮采样恰好落在窗口内时,整列表变成「镜像当真身」。这种翻转的指纹是目标屏窗口号
+        // 集合与同屏上轮**零交集** —— 自然状态不可能(开关一个图标只增删一两个窗口),
+        // 据此识别并沿用上轮结果过渡。非默认屏(副屏菜单)触发时没有对应快照,返回空列表
+        // 与副屏的正常结果(全可见 → 空)一致。
+        if let tid = Self.displayID(of: targetScreen) {
+            let curMainIDs = Set(wins.map { $0.num })
+            let prev = lastScreenWinIDs[tid] ?? []
+            if !prev.isEmpty, curMainIDs.isDisjoint(with: prev) {
+                FlowLog.menuBar.info("目标屏窗口集与上轮零交集(显示拓扑瞬变),沿用上轮 \(self.hiddenCache.count) 项")
+                if target == nil || target == Self.mainScreen() { return hiddenCache }
+                return []
+            }
+            lastScreenWinIDs[tid] = curMainIDs
         }
-        lastMainWinIDs = curMainIDs
 
         // 通用第三方 Item-0 用位置排序精确映射到应用名/图标;具名窗口(WiFi/Battery 等)直接用窗口名
         // 关键: 只保留"正在运行"的域参与映射 — 已退出应用在 defaults 里残留位置键,
@@ -584,12 +632,25 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
         // 比位置键(靠 position 单调反推)可靠得多。数量/宽度对不上就整批放弃。
         let recipientWins = wins.filter { !StatusItemPairing.isIdentifiableName($0.winName) }
         let donorWins = clones.filter { StatusItemPairing.isIdentifiableName($0.winName) }
-        let cloneName = StatusItemPairing.crossScreenNames(
+        var cloneName = StatusItemPairing.crossScreenNames(
             recipients: recipientWins.map { StatusWindow(number: $0.num, x: Double($0.x), width: Double($0.width), name: $0.winName) },
             donors: donorWins.map { StatusWindow(number: $0.num, x: Double($0.x), width: Double($0.width), name: $0.winName) })
         if cloneName.isEmpty {
             FlowLog.menuBar.info("跨屏副本命名未启用(匿名\(recipientWins.count)/具名副本\(donorWins.count))")
         } else {
+            // 顺序对齐的盲区:两屏渲染顺序可能不一致(重排后主副屏各持新旧序),同宽组内身份对调。
+            // 可见项 AX 真身当锚点换回配反的名字 —— 隐藏项(刘海下)AX 不可达,跟随组内修正
+            let anchors = Self.axIdentities(wins.filter { $0.isVisible }.map { (num: $0.num, x: $0.x, width: $0.width) })
+            let widths = Dictionary(uniqueKeysWithValues: wins.map { ($0.num, Double($0.width)) })
+            let reconciled = StatusItemPairing.reconcileAnchors(cloneName, anchors: anchors, widths: widths)
+            if reconciled != cloneName {
+                let swapDump = reconciled.compactMap { entry -> String? in
+                    guard let old = cloneName[entry.key], old != entry.value else { return nil }
+                    return "\(entry.key):\(old)→\(entry.value)"
+                }.joined(separator: ", ")
+                FlowLog.menuBar.info("AX 锚点校正换位 \(swapDump, privacy: .public)")
+            }
+            cloneName = reconciled
             let dump = cloneName.sorted { $0.key < $1.key }.map { "\($0.key)→\($0.value)" }.joined(separator: ", ")
             FlowLog.menuBar.info("跨屏副本命名 \(cloneName.count) 项:\(dump, privacy: .public)")
         }
@@ -720,8 +781,9 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
             out.append(HiddenInfo(windowNumber: CGWindowID(w.num), title: title, image: img, bundleID: resolvedBID))
             if out.count >= 16 { break }
         }
-        // 清掉已不在主屏窗口集里的死键(窗口关闭/应用退出后窗口号不再复用,缓存有界)
-        let liveIDs = Set(wins.map { CGWindowID($0.num) })
+        // 清掉已消失窗口的死键(窗口关闭/应用退出后窗口号不再复用,缓存有界)。
+        // live 集合要含 clones:副屏语境下主屏窗口全在 clones 里,只按 wins 清会把主屏身份缓存误删
+        let liveIDs = Set((wins + clones).map { CGWindowID($0.num) })
         identityCache = identityCache.filter { liveIDs.contains($0.key) }
         let dump = out.map { "\($0.title)/\($0.windowNumber)" }.joined(separator: ", ")
         FlowLog.menuBar.info("隐藏项 \(out.count) 个:\(dump, privacy: .public)")

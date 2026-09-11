@@ -107,4 +107,29 @@ struct StatusItemPairingTests {
         // 宽度未知（未运行/未观测到）→ 跳过检查，不因此否决
         #expect(StatusItemPairing.widthsConsistent([(w32, "com.aiproxy.menubar")], knownWidths: [:]))
     }
+
+    /// 2026-09-11 实测翻车场景:插拔副屏后主屏把同宽的 QQ/Spotlight 互换、副屏镜像保持旧序,
+    /// 顺序对齐把两位身份对调。可见位 7789 的 AX 真身是 QQ → 与同宽的 55 交换配对。
+    @Test func anchorReconcileSwapsMispairedSameWidthItems() {
+        let pairing = [7789: "com.apple.Spotlight", 55: "com.tencent.qq"]
+        let anchors = [7789: "com.tencent.qq"]   // 只有可见位能 AX 命中
+        let widths = [7789: 32.0, 55: 32.0]
+        let fixed = StatusItemPairing.reconcileAnchors(pairing, anchors: anchors, widths: widths)
+        #expect(fixed[7789] == "com.tencent.qq")
+        #expect(fixed[55] == "com.apple.Spotlight")
+    }
+
+    @Test func anchorReconcileLeavesAgreeingOrDifferentWidthPairs() {
+        // 锚点与配对一致 / anchors 为空 → 原样
+        let pairing = [7789: "com.tencent.qq", 55: "com.apple.Spotlight"]
+        #expect(StatusItemPairing.reconcileAnchors(pairing, anchors: [7789: "com.tencent.qq"],
+                                                   widths: [7789: 32, 55: 32]) == pairing)
+        #expect(StatusItemPairing.reconcileAnchors(pairing, anchors: [:],
+                                                   widths: [7789: 32, 55: 32]) == pairing)
+        // 真身配在别的窗口上但两者宽度不同 → 宽度是硬约束,不许换
+        let diffWidth = [8852: "com.b.x", 55: "com.a.y"]
+        let kept = StatusItemPairing.reconcileAnchors(diffWidth, anchors: [8852: "com.a.y"],
+                                                      widths: [8852: 38, 55: 32])
+        #expect(kept == diffWidth)
+    }
 }

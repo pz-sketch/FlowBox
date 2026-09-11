@@ -79,6 +79,43 @@ public enum StatusItemPairing {
         return t.unicodeScalars.allSatisfy { $0.isASCII }
     }
 
+    /// 用可见项的 AX 真身锚点校正配对结果。
+    ///
+    /// 同宽组内按 x 顺序对齐的前提是「两屏渲染顺序一致」,但显示重排后主副屏顺序可能相反
+    /// (2026-09-11 实测:插拔副屏后 QQ 与 Spotlight 在主屏互换、副屏镜像保持旧序,两个同宽
+    /// 32pt 的匿名位身份整体对调,下拉里的「QQ」实际对应被挤掉的 Spotlight,与顶栏真身重复)。
+    /// 可见项能通过 AX hit-test 拿到 pid→真身,据此**交换同宽组内配反的两个名字**;
+    /// 隐藏项(刘海下)AX 不可达,跟随组内修正。
+    /// 只在「锚点矛盾 + 双方同宽」时交换,其余原样返回 —— anchors 为空(无 AX 权限/全失败)
+    /// 时等价于无操作,不会让结果更差。
+    /// - Parameters:
+    ///   - pairing: 窗口号 → 名字(跨屏命名或位置映射的结果)
+    ///   - anchors: 可见窗口号 → AX 确认的真身名字(通常来自 pid→bundleID)
+    ///   - widths: 窗口号 → 实测宽度
+    public static func reconcileAnchors(
+        _ pairing: [Int: String],
+        anchors: [Int: String],
+        widths: [Int: Double]
+    ) -> [Int: String] {
+        guard !anchors.isEmpty, !pairing.isEmpty else { return pairing }
+        var result = pairing
+        var owner: [String: Int] = [:]
+        for (num, name) in pairing { owner[name.lowercased()] = num }
+        for (num, truth) in anchors {
+            guard let current = result[num],
+                  current.caseInsensitiveCompare(truth) != .orderedSame else { continue }
+            // AX 说的真身此刻配在别的窗口上;只有两个窗口**同宽**才允许换位(宽度是硬约束)
+            guard let other = owner[truth.lowercased()],
+                  let w1 = widths[num], let w2 = widths[other],
+                  abs(w1 - w2) <= 1 else { continue }
+            result[num] = truth
+            result[other] = current
+            owner[truth.lowercased()] = num
+            owner[current.lowercased()] = other
+        }
+        return result
+    }
+
     /// 位置键对齐的宽度自检：键所属应用的**已知宽度**必须与窗口实测宽度相容。
     ///
     /// 位置键本身不带宽度，宽度只能从各屏窗口观测里学（`knownWidths`）—— 没观测到就跳过该项检查。
