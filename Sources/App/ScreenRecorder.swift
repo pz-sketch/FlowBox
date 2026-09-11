@@ -9,6 +9,13 @@ import SharedCore
 
 // MARK: - 录屏管理(全屏 + 带声 + 可选摄像头画中画)
 
+/// 采集回调统一走这条串行队列:SCStream 与麦克风共用,保证样本按到达顺序写入 writer。
+/// (AVAssetWriter 要求同一 input 的样本 PTS 单调递增,并发回调会打乱顺序导致写入失败)
+private let recordingCaptureQueue = DispatchQueue(
+    label: "net.ai2048.flowbox.recording.capture",
+    qos: .userInitiated
+)
+
 @MainActor
 final class ScreenRecorder: NSObject {
 
@@ -31,6 +38,10 @@ final class ScreenRecorder: NSObject {
     private var countdownToken = UUID()
     private var countdownKeyMonitor: Any?
     private var isFinishing = false
+    /// writer 在录制途中进入 failed:记录一次,避免重复触发收尾
+    private var writerFailed = false
+    /// 已记录过麦克风实际样本格式(只记一次,方便排查格式类故障)
+    private var loggedMicFormat = false
 
     // 视频尺寸/帧率(用于合成)
     private var outW: Int = 0
@@ -324,7 +335,7 @@ final class ScreenRecorder: NSObject {
 
             self.writer = writer
 
-            let queue = DispatchQueue.global(qos: .userInitiated)
+            let queue = recordingCaptureQueue
             try stream.addStreamOutput(self, type: SCStreamOutputType.screen, sampleHandlerQueue: queue)
             if cfg.captureSystemAudio {
                 try stream.addStreamOutput(self, type: SCStreamOutputType.audio, sampleHandlerQueue: queue)
@@ -336,12 +347,22 @@ final class ScreenRecorder: NSObject {
                 startCameraCaptureIfNeeded()
             }
 
-            try await stream.startCapture()
-            writer.startWriting()
+            // 必须先把 writer 推进到 writing 状态再开始采集:
+            // 否则首个样本可能在 startWriting 之前抵达,此时 startSession(atSourceTime:)
+            // 会因 status 仍是 .unknown 直接抛 NSException(实测可让进程崩溃)。
+            guard writer.startWriting() else {
+                FlowLog.recording.error("startWriting 失败: \(self.describeError(writer.error), privacy: .public)")
+                showError(L10n.tr("无法开始写入视频：\n\(describeError(writer.error))",
+                                  "Cannot start writing:\n\(describeError(writer.error))"))
+                cleanup()
+                return
+            }
 
             isRecording = true
             startedAt = Date()
             hasStartedSession = false
+            writerFailed = false
+            try await stream.startCapture()
             showControlPanel()
             if cameraEnabled, cameraPanel == nil {
                 showCameraPanel()
@@ -366,7 +387,20 @@ final class ScreenRecorder: NSObject {
         session.beginConfiguration()
         if session.canAddInput(input) { session.addInput(input) }
         let output = AVCaptureAudioDataOutput()
-        output.setSampleBufferDelegate(self, queue: DispatchQueue.global(qos: .userInitiated))
+        // 必须显式声明输出格式。不指定时 cmio 会自行协商,在 macOS 26 上会算出
+        // 「1 ch, 0 Hz」这种无效目标格式(见系统日志 AudioConverterSetProperty failed),
+        // 产出的样本让 AVAssetWriter 在写入时直接报 -16122 并置为 failed。
+        // 固定成最通用的 16-bit 整型 LPCM,交给 writer 的 AAC 编码器去转码。
+        output.audioSettings = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 48000.0,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ]
+        output.setSampleBufferDelegate(self, queue: recordingCaptureQueue)
         if session.canAddOutput(output) { session.addOutput(output) }
         session.commitConfiguration()
         micSession = session
@@ -441,6 +475,11 @@ final class ScreenRecorder: NSObject {
 
     private func appendSample(_ sampleBuffer: CMSampleBuffer, type: SCStreamOutputType) {
         guard let writer, let vInput = videoInput, isRecording else { return }
+        // writer 一旦失败就立刻收尾,继续 append 只会堆积无效样本
+        guard writer.status == .writing else {
+            noteWriterFailure()
+            return
+        }
         if !hasStartedSession, type == SCStreamOutputType.screen {
             let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             if pts.isValid { writer.startSession(atSourceTime: pts) }
@@ -451,14 +490,19 @@ final class ScreenRecorder: NSObject {
         guard hasStartedSession else { return }
         switch type {
         case SCStreamOutputType.screen:
+            // 只写「完整帧」:SCK 在画面无变化时会送 idle/blank 等非完整帧,
+            // 其图像数据无效,直接追加会让 writer 判定失败
+            guard Self.isCompleteFrame(sampleBuffer) else { return }
             // 摄像头叠加:把当前帧合成后写入
             if cameraEnabled, let composed = compositedSampleBuffer(from: sampleBuffer) {
-                if vInput.isReadyForMoreMediaData { vInput.append(composed) }
+                if vInput.isReadyForMoreMediaData, !vInput.append(composed) { noteWriterFailure() }
             } else {
-                if vInput.isReadyForMoreMediaData { vInput.append(sampleBuffer) }
+                if vInput.isReadyForMoreMediaData, !vInput.append(sampleBuffer) { noteWriterFailure() }
             }
         case SCStreamOutputType.audio:
-            if let aInput = audioInput, aInput.isReadyForMoreMediaData { aInput.append(sampleBuffer) }
+            if let aInput = audioInput, aInput.isReadyForMoreMediaData, !aInput.append(sampleBuffer) {
+                noteWriterFailure()
+            }
         default:
             break
         }
@@ -495,7 +539,49 @@ final class ScreenRecorder: NSObject {
 
     private func appendMicSample(_ sampleBuffer: CMSampleBuffer) {
         guard isRecording, hasStartedSession, let mInput = micInput, mInput.isReadyForMoreMediaData else { return }
-        mInput.append(sampleBuffer)
+        logMicFormatOnce(sampleBuffer)
+        if !mInput.append(sampleBuffer) { noteWriterFailure() }
+    }
+
+    /// 第一次收到麦克风样本时把实际格式写进日志,便于定位格式类故障
+    private func logMicFormatOnce(_ sampleBuffer: CMSampleBuffer) {
+        guard !loggedMicFormat,
+              let fd = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fd) else { return }
+        loggedMicFormat = true
+        let interleaved = (asbd.pointee.mFormatFlags & kAudioFormatFlagIsNonInterleaved) == 0
+        FlowLog.recording.info("麦克风样本格式: \(asbd.pointee.mSampleRate, privacy: .public)Hz ch=\(asbd.pointee.mChannelsPerFrame, privacy: .public) bpf=\(asbd.pointee.mBytesPerFrame, privacy: .public) interleaved=\(interleaved, privacy: .public)")
+    }
+
+    /// SCK 的屏幕样本带 SCFrameStatus,只有 .complete 的帧图像数据才有效
+    private nonisolated static func isCompleteFrame(_ sampleBuffer: CMSampleBuffer) -> Bool {
+        guard let arr = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+              let att = arr.first,
+              let raw = att[SCStreamFrameInfo.status] as? Int,
+              let status = SCFrameStatus(rawValue: raw) else { return true }
+        return status == .complete
+    }
+
+    /// writer 中途失败:记一次日志并立即收尾,不必等用户手动点停止
+    private func noteWriterFailure() {
+        guard !writerFailed, !isFinishing, isRecording else { return }
+        writerFailed = true
+        FlowLog.recording.error("AVAssetWriter 写入失败: \(self.describeError(self.writer?.error), privacy: .public)")
+        Task { await finishWriting(cancelled: false) }
+    }
+
+    /// 展开 NSError 的完整信息(domain/code/底层错误)。
+    /// 默认的 localizedDescription 只有一句「这项操作无法完成」,拿不到任何线索。
+    private func describeError(_ error: Error?) -> String {
+        guard let error else { return "nil" }
+        let e = error as NSError
+        var s = "\(e.domain)/\(e.code) — \(e.localizedDescription)"
+        if let reason = e.userInfo[NSLocalizedFailureReasonErrorKey] as? String { s += " | \(reason)" }
+        if let under = e.userInfo[NSUnderlyingErrorKey] as? NSError {
+            s += " | 底层 \(under.domain)/\(under.code)"
+            if let r = under.userInfo[NSLocalizedFailureReasonErrorKey] as? String { s += " \(r)" }
+        }
+        return s
     }
 
     private func appendCameraSample(_ sampleBuffer: CMSampleBuffer) {
@@ -546,7 +632,7 @@ final class ScreenRecorder: NSObject {
         await writer.finishWriting()
         let url = outputURL
         let success = writer.status == .completed
-        let errDesc = writer.error?.localizedDescription ?? "nil"
+        let errDesc = describeError(writer.error)
         let statusRaw = writer.status.rawValue
         FlowLog.recording.info("finishWriting status=\(statusRaw) success=\(success) error=\(errDesc, privacy: .public) url=\(self.outputURL?.path ?? "nil", privacy: .public)")
         cleanup()
@@ -567,6 +653,8 @@ final class ScreenRecorder: NSObject {
         isFinishing = false
         isRecording = false
         hasStartedSession = false
+        writerFailed = false
+        loggedMicFormat = false
         stream = nil
         writer = nil
         videoInput = nil
