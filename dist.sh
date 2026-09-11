@@ -8,7 +8,7 @@ APP_NAME="FlowBox"
 EXT_NAME="FlowBoxExt"
 BUNDLE_ID="net.ai2048.flowbox"
 EXT_BUNDLE_ID="${BUNDLE_ID}.ext"
-VERSION="1.0.2"
+VERSION="1.0.3"
 DIST_DIR="dist"
 
 echo "==> 编译(release)..."
