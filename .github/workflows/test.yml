@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
       - name: Select latest Xcode
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer || true
-      - name: Run FlowBoxTestRunner (119 checks, exit 1 on failure)
+      - name: Run FlowBoxTestRunner (190 checks, exit 1 on failure)
         run: swift run FlowBoxTestRunner
 
   swift-test:

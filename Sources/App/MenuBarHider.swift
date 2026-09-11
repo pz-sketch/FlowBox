@@ -3,8 +3,9 @@ import os
 import SharedCore
 
 /// 菜单栏溢出收纳:只保留一个箭头「«」常驻最右侧。
-/// - 点箭头:弹出二级菜单,列出当前被刘海/空间不足挤掉的图标(带应用名与图标),点条目即触发它
-final class MenuBarHider: NSObject {
+/// - 点箭头:弹出二级菜单,列出当前被刘海/空间不足挤掉的图标,点条目即触发它
+/// - 菜单位置交给系统托管(`statusItem.menu` + `NSMenuDelegate`),不再手动 `popUp` 定锚点
+final class MenuBarHider: NSObject, NSMenuDelegate {
 
     static let shared = MenuBarHider()
 
@@ -18,6 +19,13 @@ final class MenuBarHider: NSObject {
     private var hiddenCacheDate: Date?
     private var posCache: [PosEntry]?; private var posCacheDate: Date?
     private var iconCache: [String:(String,NSImage?)] = [:]
+    /// 状态项窗口缩略图缓存(键 = 窗口号)。
+    ///
+    /// ⚠️ 不要用 `CGWindowListCreateImage`:它在 macOS 15 起被标记 obsoleted,在 macOS 26 上
+    /// 运行时对**任何**窗口都返回 nil(已用 dlsym 绕开编译期检查实测过,包括本进程自己的窗口)。
+    /// 改走系统工具 `screencapture -x -o -l <windowID>`,它走的是同一套窗口服务器抓取但未被移除。
+    /// 抓取在后台线程做(fork 子进程约 100ms/窗口),菜单展开时只读缓存 —— 菜单构建必须同步返回。
+    private var thumbCache: [CGWindowID: NSImage] = [:]
 
     /// 其他 App 的状态项窗口名/截图都受「屏幕录制」TCC 保护;没授权时只能显示编号
     var hasScreenCapturePermission: Bool {
@@ -25,6 +33,9 @@ final class MenuBarHider: NSObject {
     }
 
     private let sanePositionRange: ClosedRange<Double> = 1...800
+
+    /// FlowBox 自己的 bundle id —— 主图标与扩展的状态项窗口一律不进下拉、也不当命名副本。
+    private static let ownBundleIDs: Set<String> = ["net.ai2048.flowbox", ConfigStore.extBundleID]
 
     func setEnabled(_ on: Bool) {
         guard on != enabled else { return }
@@ -60,8 +71,6 @@ final class MenuBarHider: NSObject {
         let arrow = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         arrow.autosaveName = "FlowBoxMenuBarArrow"
         if let btn = arrow.button {
-            btn.target = self
-            btn.action = #selector(arrowClicked)
             let arrowLabel = L10n.tr("显示隐藏的菜单栏图标", "Show hidden menu bar icons")
             btn.image = NSImage(systemSymbolName: "chevron.left.2", accessibilityDescription: arrowLabel)
                 ?? NSImage(systemSymbolName: "chevron.left", accessibilityDescription: arrowLabel)
@@ -69,22 +78,35 @@ final class MenuBarHider: NSObject {
             btn.setAccessibilityHelp(L10n.tr("查看被刘海或空间挤掉的图标。", "View icons hidden by the notch or limited space."))
             btn.toolTip = arrowLabel
         }
+        // 位置由系统托管:AppKit 自己算菜单锚点并处理贴顶/贴边/刘海。
+        // 手动 popUp 定锚点时,锚点一旦落在菜单栏内部,系统会把首项滚出视野并在菜单顶部画一个
+        // 居中的 ^ 滚动指示器(鼠标滑进菜单后才复原)——交给系统就没有这个class的问题。
+        let menu = NSMenu()
+        menu.delegate = self
+        menu.autoenablesItems = false     // 条目启用状态由我们自己定,避免菜单弹出时再校验一轮
+        arrow.menu = menu
         arrowItem = arrow
         startPollingHiddenIcons()
     }
 
     private func destroyItems() {
         stopPollingHiddenIcons()
-        if let i = arrowItem { NSStatusBar.system.removeStatusItem(i) }
+        removeScreenshotHotKeyMonitor()
+        isMenuOpen = false
+        if let i = arrowItem {
+            i.menu?.delegate = nil
+            NSStatusBar.system.removeStatusItem(i)
+        }
         arrowItem = nil
     }
 
     // MARK: - 10s 轮询预热(鼠标在菜单/箭头附近时暂停,避免 3→4 跳变)
     private var pollTimer: Timer?
-    private var menuVisibleUntil: Date?
+    /// 菜单是否正展开(由 NSMenuDelegate 精确驱动,替代原来的时间窗口猜测)
+    private var isMenuOpen = false
     private func isHoveringMenuOrArrow() -> Bool {
-        // 1) NSMenu 正 popUp 时,系统不暴露 isVisible,直接用时间窗口判断
-        if let until = menuVisibleUntil, Date() < until { return true }
+        // 1) 菜单展开期间一律不刷新,避免后台重建导致条目闪动或数量跳变
+        if isMenuOpen { return true }
         // 2) 鼠标在箭头热区(半径 ~60pt)也算悬停,避免刚弹出就被后台刷新重建
         if let btn = arrowItem?.button, let win = btn.window {
             let mouse = NSEvent.mouseLocation
@@ -112,6 +134,7 @@ final class MenuBarHider: NSObject {
                     if self.isHoveringMenuOrArrow() { return }
                     self.hiddenCache = snap
                     self.hiddenCacheDate = Date()
+                    self.warmThumbCache()
                 }
             }
         }
@@ -127,38 +150,66 @@ final class MenuBarHider: NSObject {
 
     private var menuKeyMonitor: Any?
 
-    // MARK: - 二级菜单
+    // MARK: - 二级菜单(交给系统托管)
 
-    @objc private func arrowClicked() {
-        showHiddenMenuUsingCache()
-    }
-
-    /// 点击箭头:当场重建全量列表(pos/图标已有缓存,仅一次 CGWindowList 扫描,毫秒级),
+    /// 菜单每次展开前重建全量列表(pos/图标已有缓存,仅一次 CGWindowList 扫描,毫秒级),
     /// 保证"展示所有"——绝不使用过期快照导致少一个应用
-    private func showHiddenMenuUsingCache() {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
         let hidden = buildHiddenList()
         hiddenCache = hidden
         hiddenCacheDate = Date()
         cachedHidden = hidden
-        let menu = NSMenu()
         if hidden.isEmpty {
-            let it = NSMenuItem(title: L10n.tr("暂无被隐藏的图标(顶栏已全部可见)", "No hidden icons (all menu bar items are visible)"), action: nil, keyEquivalent: "")
+            let text = L10n.tr("暂无被隐藏的图标(顶栏已全部可见)", "No hidden icons (all menu bar items are visible)")
+            let row = MenuRowView(title: text, icon: nil, isEnabled: false)
+            row.frame.size.width = MenuRowView.unifiedWidth(forTitles: [text])
+            let it = NSMenuItem(title: text, action: nil, keyEquivalent: "")
             it.isEnabled = false
+            it.view = row
             menu.addItem(it)
-        } else {
-            for (idx, info) in hidden.enumerated() {
-                let it = NSMenuItem(title: info.title, action: #selector(didPickHiddenItem(_:)), keyEquivalent: "")
-                if let im = info.image { im.size = NSSize(width: 16, height: 16); it.image = im } else { it.image = nil }
-                it.tag = idx
-                it.target = self
-                menu.addItem(it)
-            }
+            return
         }
-        // 下拉期间监听截图快捷键:按到即收回下拉并进入截屏
+        // 行整行自绘 —— 选中态要「蓝底白字」,系统在未激活菜单里只会给一枚浅紫胶囊(见 MenuRowView)
+        let rowWidth = MenuRowView.unifiedWidth(forTitles: hidden.map { $0.title })
+        for (idx, info) in hidden.enumerated() {
+            let it = NSMenuItem(title: info.title, action: #selector(didPickHiddenItem(_:)), keyEquivalent: "")
+            it.tag = idx
+            it.target = self
+            it.isEnabled = true
+            // 尺寸已在缩略图管线里按 Self.iconPointSize 定好,这里**不能再改 size** ——
+            // 同一张 NSImage 会被菜单反复复用,每次压回会让放大设置失效
+            let row = MenuRowView(title: info.title, icon: info.image)
+            row.frame.size.width = rowWidth
+            it.view = row
+            menu.addItem(it)
+        }
+        // 本次没用上缩略图的项,趁菜单开着在后台补齐,下次展开就有图
+        warmThumbCache()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        isMenuOpen = true
+        installScreenshotHotKeyMonitor(menu: menu)
+    }
+
+    // 备注(2026-09-11 用独立菜单程序逐行抓帧实测):`menu.appearance = .darkAqua` 在这条路径上
+    // 是**生效**的(整个菜单会变深),早前记为「不生效」是测量方式的问题。
+    // 这里仍然不改菜单外观:系统默认外观符合用户预期,而图标可见性已经由
+    // 「单色图标标成模板图」从根上解决(见 `fitted`),不需要再靠改底色去迁就图标。
+
+    func menuDidClose(_ menu: NSMenu) {
+        isMenuOpen = false
+        removeScreenshotHotKeyMonitor()
+    }
+
+    /// 下拉期间监听截图快捷键:按到即收回下拉并进入截屏
+    private func installScreenshotHotKeyMonitor(menu: NSMenu) {
+        removeScreenshotHotKeyMonitor()
         let shotCfg = AppConfig.load().screenshot
         let shotCode = UInt16(shotCfg.hotKeyCode)
         let shotMods = shotCfg.hotKeyModifiers
-        menuKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        menuKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             var mods = 0
             if flags.contains(.command) { mods |= 256 }   // cmdKey
@@ -167,28 +218,17 @@ final class MenuBarHider: NSObject {
             if flags.contains(.shift)   { mods |= 512 }   // shiftKey
             if event.keyCode == shotCode && mods == shotMods {
                 menu.cancelTracking()
-                if let m = self.menuKeyMonitor { NSEvent.removeMonitor(m); self.menuKeyMonitor = nil }
+                self?.removeScreenshotHotKeyMonitor()
                 DispatchQueue.main.async { ScreenshotSession.launch() }
                 return nil
             }
             return event
         }
-        // 冻结本次快照,避免菜单可见期间后台写入导致对同一次菜单数量跳变
-        if let btn = arrowItem?.button, let view = btn.superview {
-            let p = NSPoint(x: btn.frame.midX, y: btn.frame.minY - 4)
-            menuVisibleUntil = Date().addingTimeInterval(4.0)
-            menu.popUp(positioning: nil, at: p, in: view)
-            menuVisibleUntil = Date().addingTimeInterval(0.6)
-        } else if let btn = arrowItem?.button {
-            menuVisibleUntil = Date().addingTimeInterval(4.0)
-            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: btn.bounds.maxY + 6), in: btn)
-            menuVisibleUntil = Date().addingTimeInterval(0.6)
-        }
-        if let m = menuKeyMonitor { NSEvent.removeMonitor(m); menuKeyMonitor = nil }
     }
 
-    // 老入口保留给兼容(不再被调用)
-    private func showHiddenMenu() { showHiddenMenuUsingCache() }
+    private func removeScreenshotHotKeyMonitor() {
+        if let m = menuKeyMonitor { NSEvent.removeMonitor(m); menuKeyMonitor = nil }
+    }
 
     @objc private func didPickOpenScreenCaptureSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
@@ -291,6 +331,125 @@ final class MenuBarHider: NSObject {
 
     private func hiddenStatusWindows() -> [HiddenInfo] { buildHiddenList() }
 
+    // MARK: - 状态项缩略图(绕开已废弃的 CGWindowListCreateImage)
+
+    /// 拿不到缩略图/应用图标时的占位图。用户要求菜单里不许出现 `?` 行：
+    /// 图标实在没有就用纯透明图顶位（文字兜底见 `MenuLabel.fallbackTitle`），
+    /// 条目照样保留可点击 —— 点击靠 windowNumber、与图标无关。
+    private static func unknownIcon() -> NSImage? {
+        let size = NSSize(width: iconPointSize, height: iconPointSize)
+        let img = NSImage(size: size)
+        img.lockFocus()
+        NSColor.clear.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        img.unlockFocus()
+        return img
+    }
+
+    /// 菜单项图标的显示尺寸(pt)。
+    ///
+    /// 主路径是应用自带图标(矢量、自带留白),尺寸与 `MenuRowLayout.iconSide` 一致 ——
+    /// 菜单行是自绘的,行高不受系统菜单行限制,所以这里可以给到 26pt 的大图标观感。
+    private static let iconPointSize: CGFloat = MenuRowLayout.iconSide
+
+    /// 菜单项图标的像素画布(52px = 26pt @2x)
+    private static var thumbCanvasPixels: Int { Int(iconPointSize * 2) }
+
+    /// 用系统 `screencapture` 按窗口号抓图,裁掉透明边距、等比放进 16pt 画布。
+    /// **必须在后台线程调用**(内部 fork 子进程 + 位图运算)。
+    private static func captureThumb(_ id: CGWindowID) -> NSImage? {
+        let path = NSTemporaryDirectory() + "flowbox_thumb_\(id)_\(UUID().uuidString).png"
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        p.arguments = ["-x", "-o", "-l", String(id), path]
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return nil }
+        p.waitUntilExit()
+        guard p.terminationStatus == 0,
+              let img = NSImage(contentsOfFile: path),
+              let tiff = img.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let cg = rep.cgImage else { return nil }
+        // 抓到的是一整个状态项窗口(本机实测 76x66 @2x),图标只占中间一小块(约 40x32),
+        // 四周全是透明边 —— 不裁边直接缩到 16pt,图标会被压成一小坨糊掉。裁完再等比放进画布。
+        let cropped = IconTrim.trimmed(cg)
+        return fitted(cropped, canvasPixels: thumbCanvasPixels)
+    }
+
+    /// 等比缩放进 canvasPixels × canvasPixels 的透明画布并居中。
+    /// 用 CGContext 而不是 `NSImage.lockFocus` —— 后者在后台线程会踩到共享绘图上下文。
+    private static func fitted(_ cg: CGImage, canvasPixels: Int) -> NSImage? {
+        guard canvasPixels > 0,
+              let ctx = CGContext(data: nil, width: canvasPixels, height: canvasPixels,
+                                  bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .high
+        let scale = min(CGFloat(canvasPixels) / CGFloat(cg.width),
+                        CGFloat(canvasPixels) / CGFloat(cg.height))
+        let w = CGFloat(cg.width) * scale
+        let h = CGFloat(cg.height) * scale
+        ctx.draw(cg, in: CGRect(x: (CGFloat(canvasPixels) - w) / 2,
+                                y: (CGFloat(canvasPixels) - h) / 2,
+                                width: w, height: h))
+        guard let out = ctx.makeImage() else { return nil }
+        let image = NSImage(cgImage: out, size: NSSize(width: canvasPixels / 2, height: canvasPixels / 2))
+        // 状态项缩略图是系统按**菜单栏**外观渲染的单色图形(深色壁纸→近白),而菜单底色另有一套
+        // 规则(本机:浅色菜单)。白图标落浅色底本来就发虚,鼠标悬停时 macOS 26 会画一枚**浅色胶囊**,
+        // 白上白直接看不见(用户报的「图标和背景都是白」)。
+        // 标成模板图,AppKit 就会用当前菜单文字色重绘 —— 普通态/悬停态、浅色/深色菜单四种组合都可见。
+        // 彩色图标保持原样,免得被压成单色剪影。
+        image.isTemplate = IconContrast.isMonochrome(out)
+        return image
+    }
+
+    /// 后台预热缩略图缓存:只抓还没有的窗口号,并丢弃已不在列表里的旧项。可在主线程直接调用。
+    private func warmThumbCache() {
+        let ids = hiddenCache.map { $0.windowNumber }
+        guard !ids.isEmpty else { thumbCache.removeAll(); return }
+        let known = Set(thumbCache.keys)
+        let missing = ids.filter { !known.contains($0) }
+        guard !missing.isEmpty else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            var fetched: [CGWindowID: NSImage] = [:]
+            for id in missing {
+                if let img = Self.captureThumb(id) { fetched[id] = img }
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                for (k, v) in fetched { self.thumbCache[k] = v }
+                let live = Set(ids)
+                self.thumbCache = self.thumbCache.filter { live.contains($0.key) }
+                FlowLog.menuBar.info("缩略图缓存 \(fetched.count)/\(missing.count) 抓到,共 \(self.thumbCache.count) 项")
+            }
+        }
+    }
+
+    /// 主屏菜单栏「可见状态项」的 X 区间(CG 坐标,原点左上但 X 与 Cocoa 同单位同向,已定标)。
+    ///
+    /// 刘海机型上菜单栏被刘海切成左右两段,中间那段是**物理不可见区** ——
+    /// 被挤到那里的图标正是我们要收进下拉的「隐藏项」。所以可见区是两段而不是一整条。
+    /// 拿不到刘海信息(无刘海屏)时退化成整条主屏宽度。
+    private static func visibleStatusXRanges() -> [ClosedRange<CGFloat>] {
+        guard let main = NSScreen.screens.first else { return [] }
+        let lo = main.frame.minX, hi = main.frame.maxX
+        if let right = main.auxiliaryTopRightArea, !right.isNull,
+           let left = main.auxiliaryTopLeftArea, !left.isNull {
+            return [lo...left.maxX, right.minX...hi]
+        }
+        return [lo...hi]
+    }
+
+    /// 非主屏(外接显示器)的 X 范围。
+    ///
+    /// macOS 会为同一批状态项在**每块屏**各渲染一份独立窗口(x 落在该屏范围内)。这些是镜像副本,
+    /// 不是"被挤掉的隐藏项" —— 把它们也算进来,下拉里就会出现双份同名条目(用户报的「两个 QQ」)。
+    private static func secondaryScreenXRanges() -> [ClosedRange<CGFloat>] {
+        NSScreen.screens.dropFirst().map { $0.frame.minX...$0.frame.maxX }
+    }
+
     private func buildHiddenList() -> [HiddenInfo] {
         guard let list = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
         let ownNumbers: Set<Int> = [
@@ -298,9 +457,18 @@ final class MenuBarHider: NSObject {
             mainStatusItem?.button?.window?.windowNumber,
         ].compactMap { $0 }.reduce(into: Set<Int>()) { $0.insert($1) }
 
-        // 无屏幕录制权限时拿不到窗口名(全空),名字前缀过滤失效,但 ownNumbers 仍然有效
-        struct Win { let num: Int; let x: CGFloat; let winName: String; let isOn: Bool? }
+        // CG 的 `kCGWindowIsOnscreen` 语义 ≠「在顶栏可见」:被挤掉的窗口仍报 ON,
+        // 所以它不能用来区分可见/隐藏(2026-09-11 实测:几乎所有 layer-25 窗口都报 ON)。
+        // 改用坐标判定:① 落在副屏范围内的窗口不进下拉(那是同一项的镜像副本);
+        // ② 主屏按可见区(刘海左右两段)判定谁被挤掉了。
+        //
+        // 但副屏那批**不能丢** —— autosaveName(窗口名)常常只落在其中一份上,它是主屏匿名项
+        // 唯一的可靠身份来源,收进 `clones` 备用(见下方 crossScreenName)。
+        let visibleRanges = Self.visibleStatusXRanges()
+        let secondaryRanges = Self.secondaryScreenXRanges()
+        struct Win { let num: Int; let x: CGFloat; let width: CGFloat; let winName: String; let isVisible: Bool }
         var wins: [Win] = []
+        var clones: [Win] = []
         for w in list {
             guard let owner = w[kCGWindowOwnerName as String] as? String, owner == "控制中心",
                   let layer = w[kCGWindowLayer as String] as? Int, layer == 25,
@@ -308,12 +476,21 @@ final class MenuBarHider: NSObject {
             if ownNumbers.contains(num) { continue }
             let b = w[kCGWindowBounds as String] as? [String: Any]
             let x = (b?["X"] as? CGFloat) ?? (b?["X"] as? Double).map { CGFloat($0) } ?? 0
+            let wd = (b?["Width"] as? CGFloat) ?? (b?["Width"] as? Double).map { CGFloat($0) } ?? 0
             let winName = w[kCGWindowName as String] as? String ?? ""
             // FlowBox 的三个窗口用名字过滤更稳(主图标的 windowNumber 不在 hider 里)
             if winName.hasPrefix("FlowBox") { continue }
-            let isOn = w[kCGWindowIsOnscreen as String] as? Bool
-            wins.append(Win(num: num, x: x, winName: winName, isOn: isOn))
+            if Self.ownBundleIDs.contains(winName.lowercased()) { continue }
+            if secondaryRanges.contains(where: { $0.contains(x) }) {
+                clones.append(Win(num: num, x: x, width: wd, winName: winName, isVisible: false))
+                continue
+            }
+            wins.append(Win(num: num, x: x, width: wd, winName: winName,
+                            isVisible: visibleRanges.contains(where: { $0.contains(x) })))
         }
+        // 固定成菜单栏的视觉顺序(自右向左),不要直接吃 CGWindowList 的原始顺序 ——
+        // 否则菜单条目顺序每次打开都可能不一样
+        wins.sort { $0.x > $1.x }
 
         // 通用第三方 Item-0 用位置排序精确映射到应用名/图标;具名窗口(WiFi/Battery 等)直接用窗口名
         // 关键: 只保留"正在运行"的域参与映射 — 已退出应用在 defaults 里残留位置键,
@@ -337,60 +514,152 @@ final class MenuBarHider: NSObject {
         genericEntries.sort { $0.value < $1.value }
         var genericWins = wins.filter { $0.winName == "Item-0" }
         genericWins.sort { $0.x > $1.x }
-        var numToGeneric: [Int: PosEntry] = [:]
-        // 双序列右对右 zip: x 越大(越靠右)对应 pos 越小(越靠右)
-        // 数量必须完全一致才可信;差一个都会整体错位(把 A 的窗口安成 B 的名字,出现"顶栏微信+下拉微信")
-        let gCount = min(genericWins.count, genericEntries.count)
-        let exactAlign = genericWins.count == genericEntries.count
-        for i in 0..<gCount {
-            numToGeneric[genericWins[i].num] = genericEntries[i]
-        }
-        if !exactAlign {
-            FlowLog.menuBar.info("窗口数\(genericWins.count)≠键数\(genericEntries.count),标题降级为纯图标")
-        }
-
-        // 具名条目按窗口名直接匹配(如 WiFi/Battery/BentoBox),不参与通用排序
+        // 具名条目按窗口名直接匹配(如 WiFi/Battery/BentoBox),不参与通用排序。
+        // 这些窗口名与位置键是**精确**对应的,所以它们还能反过来当锚点用(见下方校验)。
         var nameToEntry: [String: PosEntry] = [:]
         for e in allEntries where e.key != "NSStatusItem Preferred Position Item-0" {
             let short = e.key.replacingOccurrences(of: "NSStatusItem Preferred Position ", with: "")
             nameToEntry[short] = e
         }
 
+        // 各屏窗口实测到的「应用 → 窗口宽度」表,给位置键对齐当硬约束用(见 widthsConsistent)。
+        // 只能从「带身份名的窗口」上学:匿名项自己就是在等配对的那个。
+        var knownWidths: [String: Double] = [:]
+        for w in wins + clones where StatusItemPairing.isIdentifiableName(w.winName) {
+            let d = w.winName.lowercased()
+            if knownWidths[d] == nil { knownWidths[d] = Double(w.width) }
+        }
+
+        // 跨屏副本命名(**优先于位置键**):macOS 给同一批状态项在每块屏各渲染一份窗口,
+        // 而 autosaveName 常常只落在其中一份上 —— 本机实测主屏 7 个匿名 `Item-0`,
+        // 外接屏同 7 个却带着 bundle id。同一项在两侧的宽度必然相同,所以用宽度做硬约束对齐,
+        // 比位置键(靠 position 单调反推)可靠得多。数量/宽度对不上就整批放弃。
+        let recipientWins = wins.filter { !StatusItemPairing.isIdentifiableName($0.winName) }
+        let donorWins = clones.filter { StatusItemPairing.isIdentifiableName($0.winName) }
+        let cloneName = StatusItemPairing.crossScreenNames(
+            recipients: recipientWins.map { StatusWindow(number: $0.num, x: Double($0.x), width: Double($0.width), name: $0.winName) },
+            donors: donorWins.map { StatusWindow(number: $0.num, x: Double($0.x), width: Double($0.width), name: $0.winName) })
+        if cloneName.isEmpty {
+            FlowLog.menuBar.info("跨屏副本命名未启用(匿名\(recipientWins.count)/具名副本\(donorWins.count))")
+        } else {
+            let dump = cloneName.sorted { $0.key < $1.key }.map { "\($0.key)→\($0.value)" }.joined(separator: ", ")
+            FlowLog.menuBar.info("跨屏副本命名 \(cloneName.count) 项:\(dump, privacy: .public)")
+        }
+
+        var numToGeneric: [Int: PosEntry] = [:]
+        // 位置键 ↔ 窗口 的配对:两列都按「菜单栏从左到右」排序后一一对齐。
+        //
+        // 只有被 ⌘ 拖动过的图标才会写位置键(没拖过的没有键),退出应用的键又不会自己消失,
+        // 所以两列长度经常不相等(实测本机 7 窗口 / 16 键)。位置值可比:**position 越小越靠右**,
+        // 与窗口 x 严格反向单调,所以对齐后可用具名系统项(WiFi/Battery/BentoBox 的 x 与 position 都已知)
+        // 当锚点校验整条阶梯。
+        //
+        // 【宁缺毋滥】只有两列**数量完全相等**时才配对。残留键混在中间时,用 min() 截断对齐会让整批
+        // 错位一格 —— 而错位后的阶梯**依然单调**,单调校验根本发现不了(本机实测:7 键 7 窗那种
+        // "长度相等"的巧合下,错位一格仍判"通过",于是把 QQ 的名字安到了别人头上)。
+        // 再加一道宽度自检兜底,任一条不过就整批放弃:名字宁可不显示(退回窗口号),也不能张冠李戴。
+        if !genericWins.isEmpty, genericWins.count == genericEntries.count {
+            var candidate: [Int: PosEntry] = [:]
+            for i in 0..<genericWins.count { candidate[genericWins[i].num] = genericEntries[i] }
+
+            var ladder: [(x: CGFloat, pos: Double)] = genericWins.compactMap { w in
+                candidate[w.num].map { (w.x, $0.value) }
+            }
+            for w in wins where StatusItemPairing.isIdentifiableName(w.winName) {
+                if let e = nameToEntry[w.winName] { ladder.append((w.x, e.value)) }
+            }
+            ladder.sort { $0.x < $1.x }
+            var monotonic = ladder.count >= 2
+            for i in 1..<max(1, ladder.count) where ladder[i].pos >= ladder[i - 1].pos {
+                monotonic = false
+                break
+            }
+            let widthPairs: [(window: StatusWindow, bundleID: String)] = genericWins.compactMap { w in
+                guard let e = candidate[w.num] else { return nil }
+                return (StatusWindow(number: w.num, x: Double(w.x), width: Double(w.width), name: w.winName), e.domain)
+            }
+            let widthsOK = StatusItemPairing.widthsConsistent(widthPairs, knownWidths: knownWidths)
+            if monotonic, widthsOK {
+                numToGeneric = candidate
+                FlowLog.menuBar.info("位置映射 \(candidate.count) 项,锚点 \(ladder.count) 级单调+宽度校验通过")
+            } else {
+                FlowLog.menuBar.info("位置映射校验未通过(单调=\(monotonic) 宽度=\(widthsOK),窗口\(genericWins.count)/键\(genericEntries.count)),降级为窗口号")
+            }
+        } else {
+            FlowLog.menuBar.info("位置映射未启用(窗口\(genericWins.count)/键\(genericEntries.count) 数量不等,不猜)")
+        }
+
         var out: [HiddenInfo] = []
         for w in wins {
-            if w.isOn == true { continue }
+            // 下拉只列真隐藏:已在顶栏可见的不再列入(根治"顶栏一个 QQ、下拉又一个 QQ")。
+            // 可见性判不出(aux 为 nil)时保守保留,宁可重复也不丢条目。
+            if w.isVisible { continue }
             var title: String
             var img: NSImage?
-            if w.winName == "Item-0" {
-                // 窗口真实截图图标为主(已有屏幕录制权限,截得到);名字仅在数量精确对齐时显示
-                var cgImg: NSImage? = nil
-                if let cg = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(w.num), [.boundsIgnoreFraming, .bestResolution]) {
-                    cgImg = NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width)/2, height: CGFloat(cg.height)/2))
-                    cgImg?.isTemplate = false
-                    cgImg?.size = NSSize(width: 18, height: 18)
+            // 窗口真实缩略图(后台预抓的缓存);拿不到时用透明占位顶位,但**条目一律保留** ——
+            // 点击靠 windowNumber、与图标无关,绝不能因为"截不到图"就把条目丢掉(曾因此把菜单清空)。
+            // 标题永远非空(MenuLabel.fallbackTitle):不许出现 `?` 行,包名/窗口名都可以显示。
+            let shot = thumbCache[CGWindowID(w.num)]
+            var resolvedBID: String? = cloneName[w.num]
+            if let donor = cloneName[w.num] {
+                // 跨屏副本给出的身份通常就是 autosaveName/bundle id。能**精确**反查到应用就用应用
+                // 自己的名字(QQ / 微信 / WorkBuddy)与图标;反查不到(系统项 `WiFi` 等)原样用它 ——
+                // 绝不做模糊匹配,免得被 /Applications 里名字相近的 App 串味。
+                var appIcon: NSImage? = nil
+                if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: donor) {
+                    appIcon = NSWorkspace.shared.icon(forFile: url.path)
+                    appIcon?.size = NSSize(width: Self.iconPointSize, height: Self.iconPointSize)
                 }
+                if StatusItemPairing.looksLikeBundleID(donor) {
+                    let info = appDisplayInfo(for: donor)
+                    title = info.title.isEmpty ? donor : info.title
+                    img = info.icon ?? appIcon ?? shot ?? Self.unknownIcon()
+                } else {
+                    title = donor
+                    img = appIcon ?? shot ?? Self.unknownIcon()
+                }
+            } else if w.winName == "Item-0" {
                 if let e = numToGeneric[w.num] {
+                    // 配对已通过单调+宽度校验:优先用应用**自己的图标与名称**(理由同上)
                     let info = appDisplayInfo(for: e.domain)
                     title = info.title
-                    img = cgImg ?? info.icon
+                    img = info.icon ?? shot ?? Self.unknownIcon()
+                    if title.isEmpty { title = MenuLabel.fallbackTitle(winName: "", bundleID: e.domain, windowNumber: w.num) }
+                    resolvedBID = e.domain
                 } else {
-                    // 映射对不上（通常是已退出应用的残留窗口）：直接跳过，不显示 图标xxx
-                    continue
+                    // 校验没通过:不猜名字,只挂窗口真实缩略图,标题用窗口号兜底
+                    title = MenuLabel.fallbackTitle(winName: "", bundleID: nil, windowNumber: w.num)
+                    img = shot ?? Self.unknownIcon()
                 }
             } else if w.winName.isEmpty {
-                // 空名匿名窗口且无映射：跳过不展示，避免 图标xxx
-                continue
+                // 空名匿名窗口且无映射:标题用窗口号兜底,保留可点击
+                title = MenuLabel.fallbackTitle(winName: "", bundleID: nil, windowNumber: w.num)
+                img = shot ?? Self.unknownIcon()
             } else {
-                // 具名系统图标:直接用窗口名,图标用控制中心内置或留空
-                title = w.winName
-                img = nil
+                // 具名窗口(WiFi/Battery 等系统项,或自带 autosaveName 的第三方项)。
+                // ① 窗口名是人话(中文)直接用;
+                // ② 是**能精确反查到应用**的 bundle id → 用应用自己的名字与图标(比裸包名像人话);
+                // ③ 其余(域名/autosaveName)原样显示 —— 用户要求:可以出现包名,不许出现空标题。
+                let disp = MenuLabel.displayable(w.winName)
+                if !disp.isEmpty {
+                    title = disp
+                    img = shot ?? Self.unknownIcon()
+                } else if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: w.winName) {
+                    let info = appDisplayInfo(for: w.winName)
+                    title = info.title.isEmpty ? w.winName : info.title
+                    img = info.icon ?? NSWorkspace.shared.icon(forFile: url.path)
+                    img?.size = NSSize(width: Self.iconPointSize, height: Self.iconPointSize)
+                } else {
+                    title = MenuLabel.fallbackTitle(winName: w.winName, bundleID: nil, windowNumber: w.num)
+                    img = shot ?? Self.unknownIcon()
+                }
             }
             if title.hasPrefix("FlowBox") { continue }
-            var bid: String? = nil
-            if w.winName == "Item-0", let e = numToGeneric[w.num] { bid = e.domain }
-            out.append(HiddenInfo(windowNumber: CGWindowID(w.num), title: title, image: img, bundleID: bid))
+            out.append(HiddenInfo(windowNumber: CGWindowID(w.num), title: title, image: img, bundleID: resolvedBID))
             if out.count >= 16 { break }
         }
+        let dump = out.map { "\($0.title)/\($0.windowNumber)" }.joined(separator: ", ")
+        FlowLog.menuBar.info("隐藏项 \(out.count) 个:\(dump, privacy: .public)")
         return out
     }
 
@@ -404,9 +673,10 @@ final class MenuBarHider: NSObject {
         let prettyNames: [String: String] = [
             "com.bytedance.macos.feishu.helper": "飞书",
             "com.bytedance.macos.feishu": "飞书",
-            "com.tencent.xinWeChat": "微信",
-            "com.alibaba.DingTalk": "钉钉",
-            "com.tencent.WeWork": "企业微信",
+            "com.tencent.xinwechat": "微信",
+            "com.tencent.qq": "QQ",
+            "com.alibaba.dingtalk": "钉钉",
+            "com.tencent.wework": "企业微信",
             "cn.trae.app": "Trae",
             "io.github.clash-verge-rev.clash-verge-rev": "Clash Verge",
             "com.legendsec.vpnclientx": "奇安信VPN",
@@ -415,7 +685,7 @@ final class MenuBarHider: NSObject {
             var icon: NSImage? = nil
             if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
                 icon = NSWorkspace.shared.icon(forFile: url.path)
-                icon?.size = NSSize(width: 16, height: 16)
+                icon?.size = NSSize(width: Self.iconPointSize, height: Self.iconPointSize)
             }
             let _vp=(pretty, icon); iconCache[lk]=_vp; return _vp
         }
@@ -430,7 +700,7 @@ final class MenuBarHider: NSObject {
         if let (t, pp) = known[lower] {
             if let path = pp, FileManager.default.fileExists(atPath: path) {
                 let icon = NSWorkspace.shared.icon(forFile: path)
-                icon.size = NSSize(width: 16, height: 16)
+                icon.size = NSSize(width: Self.iconPointSize, height: Self.iconPointSize)
                 let _v=(t, icon); iconCache[lk]=_v; return _v
             } else if pp == nil {
                 let _v0=(t, nil as NSImage?); iconCache[lk]=_v0; return _v0
@@ -440,7 +710,7 @@ final class MenuBarHider: NSObject {
             let raw = FileManager.default.displayName(atPath: url.path)
             let title = raw.hasSuffix(".app") ? String(raw.dropLast(4)) : (raw.isEmpty ? (bundleID.components(separatedBy: ".").last ?? bundleID) : raw)
             let icon = NSWorkspace.shared.icon(forFile: url.path)
-            icon.size = NSSize(width: 16, height: 16)
+            icon.size = NSSize(width: Self.iconPointSize, height: Self.iconPointSize)
             let _v1=(title, icon); iconCache[lk]=_v1; return _v1
         }
         // 非标准: /Applications 模糊
@@ -452,7 +722,7 @@ final class MenuBarHider: NSObject {
                 let title = FileManager.default.displayName(atPath: path)
                 let clean = title.hasSuffix(".app") ? String(title.dropLast(4)) : title
                 let icon = NSWorkspace.shared.icon(forFile: path)
-                icon.size = NSSize(width: 16, height: 16)
+                icon.size = NSSize(width: Self.iconPointSize, height: Self.iconPointSize)
                 if !clean.isEmpty { let _v2=(clean, icon); iconCache[lk]=_v2; return _v2 }
             }
         }

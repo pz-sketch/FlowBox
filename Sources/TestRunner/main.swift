@@ -260,5 +260,230 @@ do {
     checkEq(untouched, points, "zero delta leaves annotation points untouched")
 }
 
+// 状态项缩略图裁剪:找非透明像素的包围盒。
+// (菜单栏状态项窗口 76x66,图标只占中间约 40x32,不裁边直接缩到 16pt 会糊成一坨)
+do {
+    let w = 5, h = 4
+    // 内容在 (1,1)-(3,2),行优先、自上而下
+    var alpha = [UInt8](repeating: 0, count: w * h)
+    for y in 1...2 { for x in 1...3 { alpha[y * w + x] = 255 } }
+    let box = IconTrim.contentBounds(alpha: alpha, width: w, height: h)
+    checkEq(box?.x ?? -1, 1, "icon trim bounds minX")
+    checkEq(box?.y ?? -1, 1, "icon trim bounds minY")
+    checkEq(box?.width ?? -1, 3, "icon trim bounds width")
+    checkEq(box?.height ?? -1, 2, "icon trim bounds height")
+
+    // 全透明 → nil(调用方应原样返回原图,绝不产出空图)
+    let emptyBox = IconTrim.contentBounds(alpha: [UInt8](repeating: 0, count: w * h), width: w, height: h)
+    check(emptyBox == nil, "icon trim returns nil for fully transparent image")
+
+    // 低于阈值的抗锯齿拖尾不算内容
+    var faint = [UInt8](repeating: 0, count: w * h)
+    faint[0] = 10                 // < 26:忽略
+    faint[2 * w + 4] = 200        // 保留
+    let faintBox = IconTrim.contentBounds(alpha: faint, width: w, height: h)
+    checkEq(faintBox?.x ?? -1, 4, "icon trim ignores sub-threshold pixels (minX)")
+    checkEq(faintBox?.y ?? -1, 2, "icon trim ignores sub-threshold pixels (minY)")
+
+    // 退化入参 → nil,不能崩
+    check(IconTrim.contentBounds(alpha: [], width: 0, height: 0) == nil, "icon trim rejects degenerate input")
+
+    // padding 外扩,并夹在图内(不能超过边界)
+    checkEq(IconTrim.paddedRect((x: 0, y: 0, width: 5, height: 4), imageWidth: w, imageHeight: h, padding: 2),
+            CGRect(x: 0, y: 0, width: 5, height: 4), "padded rect clamped at image edges")
+    checkEq(IconTrim.paddedRect((x: 2, y: 2, width: 1, height: 1), imageWidth: w, imageHeight: h, padding: 1),
+            CGRect(x: 1, y: 1, width: 3, height: 3), "padded rect expands around content")
+}
+
+// 菜单条目文字取舍:机器标识/纯英文一律退回纯图标
+do {
+    checkEq(MenuLabel.displayable("omlx.metric.live"), "", "drop domain-style menu title")
+    checkEq(MenuLabel.displayable("com.tencent.xinWeChat"), "", "drop bundle-id menu title")
+    checkEq(MenuLabel.displayable("BentoBox-0"), "", "drop autosaveName menu title")
+    checkEq(MenuLabel.displayable("WiFi"), "", "drop plain-english menu title")
+    checkEq(MenuLabel.displayable("12345"), "", "drop numeric menu title")
+    checkEq(MenuLabel.displayable("聚焦"), "聚焦", "keep chinese menu title")
+    checkEq(MenuLabel.displayable("  电池  "), "电池", "trim whitespace around menu title")
+    checkEq(MenuLabel.displayable("微信 WeChat"), "微信 WeChat", "keep mixed cjk and ascii title")
+    checkEq(MenuLabel.displayable(""), "", "empty menu title stays empty")
+    checkEq(MenuLabel.displayable("   "), "", "whitespace-only menu title stays empty")
+    check(MenuLabel.containsCJK("输入法"), "detects cjk characters")
+    check(!MenuLabel.containsCJK("Autofill"), "rejects pure ascii text")
+    // 标题兜底:永远非空,不许出现空标题/`?` 行(包名/窗口名都可以显示)
+    checkEq(MenuLabel.fallbackTitle(winName: "com.tencent.qq", bundleID: nil, windowNumber: 1), "com.tencent.qq", "fallback shows package name as-is")
+    checkEq(MenuLabel.fallbackTitle(winName: "  电池  ", bundleID: nil, windowNumber: 2), "电池", "fallback trims whitespace")
+    checkEq(MenuLabel.fallbackTitle(winName: "Item-0", bundleID: nil, windowNumber: 8617), "菜单栏图标 8617", "fallback disambiguates anonymous items by window number")
+    checkEq(MenuLabel.fallbackTitle(winName: "", bundleID: "com.tencent.qq", windowNumber: 3), "com.tencent.qq", "fallback uses bundleID for empty window name")
+    checkEq(MenuLabel.fallbackTitle(winName: "", bundleID: nil, windowNumber: 4), "菜单栏图标 4", "fallback never returns empty")
+}
+
+// 状态项配对:跨屏副本命名 + 位置键宽度自检(两条都必须「宁缺毋滥」)
+do {
+    check(!StatusItemPairing.isIdentifiableName(""), "empty window name is not an identity")
+    check(!StatusItemPairing.isIdentifiableName("   "), "whitespace window name is not an identity")
+    check(!StatusItemPairing.isIdentifiableName("Item-0"), "Item-0 is anonymous")
+    check(!StatusItemPairing.isIdentifiableName("Item-12"), "Item-N is anonymous")
+    check(StatusItemPairing.isIdentifiableName("com.tencent.qq"), "bundle id counts as identity")
+    check(StatusItemPairing.isIdentifiableName("WiFi"), "system window name counts as identity")
+    check(StatusItemPairing.looksLikeBundleID("com.tencent.qq"), "bundle id form is recognized")
+    check(!StatusItemPairing.looksLikeBundleID("WiFi"), "dotless system name is not a bundle id")
+    check(!StatusItemPairing.looksLikeBundleID("Bento Box.1"), "name with a space is not a bundle id")
+
+    // 本机实测形态:主屏 7 个匿名 Item-0,外接屏同 7 个带 bundle id,两侧宽度序列一致
+    let anon = [
+        StatusWindow(number: 8203, x: 880,  width: 38, name: "Item-0"),
+        StatusWindow(number: 7789, x: 918,  width: 32, name: "Item-0"),
+        StatusWindow(number: 55,   x: 950,  width: 32, name: "Item-0"),
+        StatusWindow(number: 8852, x: 982,  width: 38, name: "Item-0"),
+        StatusWindow(number: 91,   x: 1020, width: 34, name: "Item-0"),
+        StatusWindow(number: 52,   x: 1054, width: 44, name: "Item-0"),
+        StatusWindow(number: 95,   x: 1098, width: 38, name: "Item-0"),
+    ]
+    let named = [
+        StatusWindow(number: 8619, x: 2798, width: 38, name: "com.tencent.workbuddy.mac"),
+        StatusWindow(number: 8617, x: 2836, width: 32, name: "com.tencent.qq"),
+        StatusWindow(number: 8608, x: 2868, width: 32, name: "com.apple.Spotlight"),
+        StatusWindow(number: 8854, x: 2900, width: 38, name: "com.tencent.xinWeChat"),
+        StatusWindow(number: 8610, x: 2938, width: 34, name: "io.github.clash-verge-rev.clash-verge-rev"),
+        StatusWindow(number: 8607, x: 2972, width: 44, name: "com.apple.TextInputMenuAgent"),
+        StatusWindow(number: 8614, x: 3016, width: 38, name: "ndsc-gui"),
+    ]
+    let mapped = StatusItemPairing.crossScreenNames(recipients: anon, donors: named)
+    checkEq(mapped.count, 7, "cross-screen naming covers every anonymous item")
+    checkEq(mapped[7789] ?? "", "com.tencent.qq", "width 32 + x-order pins QQ to the right window")
+    checkEq(mapped[8203] ?? "", "com.tencent.workbuddy.mac", "width 38 disambiguates workbuddy")
+    checkEq(mapped[8852] ?? "", "com.tencent.xinWeChat", "same-width group keeps x-order for wechat")
+    checkEq(mapped[91] ?? "", "io.github.clash-verge-rev.clash-verge-rev", "unique width 34 maps clash")
+    checkEq(mapped[95] ?? "", "ndsc-gui", "trailing width 38 maps ndsc")
+
+    // 数量不等 / 宽度对不上 / 两侧同名冲突 → 整批放弃(名字宁可不显示)
+    check(StatusItemPairing.crossScreenNames(recipients: anon, donors: Array(named.dropLast())).isEmpty,
+          "count mismatch aborts the whole batch")
+    var skewed = named
+    skewed[0] = StatusWindow(number: 8619, x: 2798, width: 50, name: "com.tencent.workbuddy.mac")
+    check(StatusItemPairing.crossScreenNames(recipients: anon, donors: skewed).isEmpty,
+          "width multiset mismatch aborts the whole batch")
+    let clashR = [StatusWindow(number: 1, x: 10, width: 38, name: "com.a.one"),
+                  StatusWindow(number: 2, x: 20, width: 38, name: "com.b.two")]
+    let clashD = [StatusWindow(number: 3, x: 80, width: 38, name: "com.b.two"),
+                  StatusWindow(number: 4, x: 90, width: 38, name: "com.a.one")]
+    check(StatusItemPairing.crossScreenNames(recipients: clashR, donors: clashD).isEmpty,
+          "same-width order conflict aborts the whole batch")
+
+    // 另一种实测形态:主屏只有 4 个空名系统项(WiFi/Battery/BentoBox/Clock),名字落在副屏
+    let emptyR = [StatusWindow(number: 1136, x: 1136, width: 38,  name: ""),
+                  StatusWindow(number: 1174, x: 1174, width: 71,  name: ""),
+                  StatusWindow(number: 1321, x: 1321, width: 42,  name: ""),
+                  StatusWindow(number: 1363, x: 1363, width: 151, name: "")]
+    let sysD = [StatusWindow(number: 3054, x: 3054, width: 38,  name: "WiFi"),
+                StatusWindow(number: 3092, x: 3092, width: 71,  name: "Battery"),
+                StatusWindow(number: 3239, x: 3239, width: 42,  name: "BentoBox-0"),
+                StatusWindow(number: 3281, x: 3281, width: 151, name: "Clock")]
+    let sysMapped = StatusItemPairing.crossScreenNames(recipients: emptyR, donors: sysD)
+    checkEq(sysMapped.count, 4, "system items get named from the other screen's copy")
+    checkEq(sysMapped[1174] ?? "", "Battery", "unique width 71 pins Battery")
+    checkEq(sysMapped[1363] ?? "", "Clock", "unique width 151 pins Clock")
+
+    // 位置键对齐的宽度自检:已知宽度不符即否决;未观测到的域跳过
+    let w32 = StatusWindow(number: 7, x: 918, width: 32, name: "Item-0")
+    check(StatusItemPairing.widthsConsistent([(w32, "com.tencent.qq")], knownWidths: ["com.tencent.qq": 32]),
+          "known width agrees with the window")
+    check(!StatusItemPairing.widthsConsistent([(w32, "com.tencent.xinWeChat")], knownWidths: ["com.tencent.xinwechat": 38]),
+          "stale position key with wrong width is rejected")
+    check(StatusItemPairing.widthsConsistent([(w32, "com.aiproxy.menubar")], knownWidths: [:]),
+          "unobserved width is skipped, not rejected")
+}
+
+// 菜单图标「悬停也看得见」:判定单色图标 → 交给 AppKit 按菜单文字色重绘(模板图)
+do {
+    check(IconContrast.isNeutralPixel(r: 1, g: 1, b: 1), "pure white counts as neutral")
+    check(IconContrast.isNeutralPixel(r: 0, g: 0, b: 0), "pure black counts as neutral")
+    check(IconContrast.isNeutralPixel(r: 0.5, g: 0.5, b: 0.53), "near-gray counts as neutral")
+    check(!IconContrast.isNeutralPixel(r: 1, g: 0.6, b: 0), "orange is not neutral")
+    check(!IconContrast.isNeutralPixel(r: 0.2, g: 0.8, b: 0.3), "green is not neutral")
+
+    func makeRGBA(_ px: [UInt8], _ w: Int, _ h: Int) -> CGImage? {
+        guard let p = CGDataProvider(data: Data(px) as CFData) else { return nil }
+        return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
+                       space: CGColorSpaceCreateDeviceRGB(),
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                       provider: p, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+    }
+    // 白/黑/彩色/透明 四类像素,统计灰阶占比(全透明像素不参与)
+    let mixedPx: [UInt8] = [
+        255, 255, 255, 255,   // 不透明白(深色菜单栏的典型产物)
+        0, 0, 0, 255,         // 不透明黑(浅色菜单栏的产物)
+        0, 0, 0, 0,           // 全透明
+        255, 153, 0, 255,     // 不透明橙 → 唯一的彩色像素
+    ]
+    if let src = makeRGBA(mixedPx, 4, 1) {
+        let ratio = IconContrast.neutralRatio(of: src)
+        check(abs(ratio - 2.0 / 3.0) < 0.001, "neutral ratio counts 2 of 3 opaque pixels (got \(ratio))")
+        // 三分之一的像素带彩色 → 不够格当模板图(彩色 logo 会被压成剪影)
+        check(!IconContrast.isMonochrome(src), "one third colored pixels is not enough for template")
+    } else {
+        check(false, "failed to build mixed test bitmap")
+    }
+    // 真实状态项图标:整块内容都是同一族灰阶(偶尔一两个彩色角标) → 当模板图
+    var glyphPx = [UInt8]()
+    for _ in 0..<19 { glyphPx += [255, 255, 255, 255] }   // 19 个近白像素(深色菜单栏)
+    glyphPx += [255, 153, 0, 255]                         // 1 个彩色角标
+    if let src = makeRGBA(glyphPx, 20, 1) {
+        check(IconContrast.neutralRatio(of: src) >= IconContrast.defaultNeutralRatio,
+              "glyph with a single colored pixel is neutral enough")
+        check(IconContrast.isMonochrome(src), "black/white glyph is treated as template")
+    } else {
+        check(false, "failed to build glyph test bitmap")
+    }
+    // 彩色占比够高就不该当模板图 —— 否则品牌 logo 会被压成单色剪影
+    let coloredPx: [UInt8] = [
+        255, 60, 0, 255,
+        0, 200, 90, 255,
+        40, 90, 255, 255,
+        255, 255, 255, 255,
+    ]
+    if let src = makeRGBA(coloredPx, 4, 1) {
+        check(!IconContrast.isMonochrome(src), "colorful app icon is not treated as template")
+    } else {
+        check(false, "failed to build colored test bitmap")
+    }
+    // 全透明 → 没有内容,不能判成模板图
+    if let src = makeRGBA([0, 0, 0, 0, 0, 0, 0, 0], 2, 1) {
+        checkEq(IconContrast.neutralRatio(of: src), 0, "fully transparent image has zero neutral ratio")
+        check(!IconContrast.isMonochrome(src), "fully transparent image is not a template candidate")
+    } else {
+        check(false, "failed to build empty test bitmap")
+    }
+    checkEq(IconContrast.neutralRatio(of: makeRGBA([1, 2, 3, 4], 0, 0) ?? makeRGBA([1, 2, 3, 4], 1, 1)!),
+            0, "degenerate image yields zero neutral ratio")
+}
+
+// 收纳菜单的自绘行:所有行必须同宽,否则菜单里文字参差不齐
+do {
+    // 纯图标行(草稿里的"暂无"占位也是这种)只有下限宽度
+    checkEq(MenuRowLayout.unifiedWidth(widestTitle: 0),
+            MenuRowLayout.defaultMinimumWidth,
+            "icon only row falls back to the minimum width")
+    checkEq(MenuRowLayout.unifiedWidth(widestTitle: 10),
+            MenuRowLayout.defaultMinimumWidth,
+            "narrow title still gets the minimum width")
+    // 文字够宽时,行宽 = 前缀(图标左内边距+图标+间隙) + 最宽文字 + 右侧留白
+    checkEq(MenuRowLayout.unifiedWidth(widestTitle: 200),
+            MenuRowLayout.titleOriginX + 200 + MenuRowLayout.trailingInset,
+            "wide title drives the row width")
+    // 超长文字被上限截断,菜单不至于横穿屏幕
+    checkEq(MenuRowLayout.unifiedWidth(widestTitle: 5000),
+            MenuRowLayout.defaultMaximumWidth,
+            "very long title is clamped to the maximum width")
+    checkEq(MenuRowLayout.titleOriginX,
+            MenuRowLayout.iconLeading + MenuRowLayout.iconSide + MenuRowLayout.titleGap,
+            "title origin accounts for the icon column")
+    // 「大图标 + 应用名」的观感:图标要完整落在行内还留呼吸位,文字明显小于图标
+    check(MenuRowLayout.rowHeight >= MenuRowLayout.iconSide + 8,
+          "icon fits inside the row with breathing room")
+    check(MenuRowLayout.titleFontSize < MenuRowLayout.iconSide,
+          "title stays smaller than the icon")
+}
+
 print("\n=== Result: \(passed) passed, \(failed) failed ===")
 if failed>0 { exit(1) }
