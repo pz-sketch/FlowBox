@@ -21,6 +21,9 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
     private var iconCache: [String:(String,NSImage?)] = [:]
     /// 上一轮「主屏状态项窗口号」全集,用于识别显示拓扑瞬变(见 buildHiddenList 内的零交集检查)
     private var lastMainWinIDs: Set<Int> = []
+    /// 窗口号 → 上次成功配到的身份。主屏匿名项的名字靠副屏镜像副本供给,副屏重连时那批
+    /// 副本会整个重建(窗口号全换),重建完成前命名断供 —— 主屏窗口号此刻不变,用缓存顶着。
+    private var identityCache: [CGWindowID: (title: String, bundleID: String?)] = [:]
     /// 状态项窗口缩略图缓存(键 = 窗口号)。
     ///
     /// ⚠️ 不要用 `CGWindowListCreateImage`:它在 macOS 15 起被标记 obsoleted,在 macOS 26 上
@@ -671,15 +674,26 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
                     img = info.icon ?? shot ?? Self.unknownIcon()
                     if title.isEmpty { title = MenuLabel.fallbackTitle(winName: "", bundleID: e.domain, windowNumber: w.num) }
                     resolvedBID = e.domain
+                } else if let cached = identityCache[CGWindowID(w.num)] {
+                    // 副屏镜像重建期(重连/重协商)跨屏命名断供:主屏窗口号没变,沿用上次身份
+                    title = cached.title
+                    img = cached.bundleID.flatMap { appDisplayInfo(for: $0).icon } ?? shot ?? Self.unknownIcon()
+                    resolvedBID = cached.bundleID
                 } else {
                     // 校验没通过:不猜名字,只挂窗口真实缩略图,标题用窗口号兜底
                     title = MenuLabel.fallbackTitle(winName: "", bundleID: nil, windowNumber: w.num)
                     img = shot ?? Self.unknownIcon()
                 }
             } else if w.winName.isEmpty {
-                // 空名匿名窗口且无映射:标题用窗口号兜底,保留可点击
-                title = MenuLabel.fallbackTitle(winName: "", bundleID: nil, windowNumber: w.num)
-                img = shot ?? Self.unknownIcon()
+                if let cached = identityCache[CGWindowID(w.num)] {
+                    title = cached.title
+                    img = cached.bundleID.flatMap { appDisplayInfo(for: $0).icon } ?? shot ?? Self.unknownIcon()
+                    resolvedBID = cached.bundleID
+                } else {
+                    // 空名匿名窗口且无映射:标题用窗口号兜底,保留可点击
+                    title = MenuLabel.fallbackTitle(winName: "", bundleID: nil, windowNumber: w.num)
+                    img = shot ?? Self.unknownIcon()
+                }
             } else {
                 // 具名窗口(WiFi/Battery 等系统项,或自带 autosaveName 的第三方项)。
                 // ① 窗口名是人话(中文)直接用;
@@ -700,9 +714,15 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
                 }
             }
             if title.hasPrefix("FlowBox") { continue }
+            // 拿到真实身份的记入缓存(bundleID 非空 = cloneName/位置映射/缓存三来源之一),
+            // 供副屏镜像重建期断供时沿用;裸窗口号兜底项(bundleID 为 nil)不记,免得污染缓存
+            if let bid = resolvedBID { identityCache[CGWindowID(w.num)] = (title, bid) }
             out.append(HiddenInfo(windowNumber: CGWindowID(w.num), title: title, image: img, bundleID: resolvedBID))
             if out.count >= 16 { break }
         }
+        // 清掉已不在主屏窗口集里的死键(窗口关闭/应用退出后窗口号不再复用,缓存有界)
+        let liveIDs = Set(wins.map { CGWindowID($0.num) })
+        identityCache = identityCache.filter { liveIDs.contains($0.key) }
         let dump = out.map { "\($0.title)/\($0.windowNumber)" }.joined(separator: ", ")
         FlowLog.menuBar.info("隐藏项 \(out.count) 个:\(dump, privacy: .public)")
         return out
