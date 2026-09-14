@@ -393,8 +393,9 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
             let x = (b["X"] as? CGFloat) ?? (b["X"] as? Double).map { CGFloat($0) } ?? 0
             let wd = (b["Width"] as? CGFloat) ?? (b["Width"] as? Double).map { CGFloat($0) } ?? 0
             if secondaryRanges.contains(where: { $0.contains(x) }) { continue }
-            // 只挑「当前被挤隐藏」的:可见的匿名项不需要腾位就能点射,但不进下拉、无须辨认
-            if visibleRanges.contains(where: { $0.contains(x) }) { continue }
+            // 只挑「当前真隐藏」的(与 buildHiddenList 同一条判定:真渲染 + 坐标在带内才算可见)
+            let rendered = (w[kCGWindowIsOnscreen as String] as? Bool) == true
+            if rendered, visibleRanges.contains(where: { $0.contains(x) }) { continue }
             out.append((num, x, wd))
         }
         return out
@@ -795,13 +796,14 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
             mainStatusItem?.button?.window?.windowNumber,
         ].compactMap { $0 }.reduce(into: Set<Int>()) { $0.insert($1) }
 
-        // CG 的 `kCGWindowIsOnscreen` 语义 ≠「在顶栏可见」:被挤掉的窗口仍报 ON,
-        // 所以它不能用来区分可见/隐藏(2026-09-11 实测:几乎所有 layer-25 窗口都报 ON)。
-        // 改用坐标判定:① 落在副屏范围内的窗口不进下拉(那是同一项的镜像副本);
-        // ② 主屏按可见区(刘海左右两段)判定谁被挤掉了。
-        //
-        // 但副屏那批**不能丢** —— autosaveName(窗口名)常常只落在其中一份上,它是主屏匿名项
-        // 唯一的可靠身份来源,收进 `clones` 备用(见下方 crossScreenName)。
+        // 可见性判定 = **真实渲染标志** AND **坐标在可见带内**,两个条件缺一不可:
+        // ① 只看坐标会把「幻影 x」当真 —— 2026-09-14 实测:WorkBuddy 窗口 x=645 落在左可见带、
+        //    Trae 窗口 x=857 落在右可见带,但都 onscreen=false、屏幕上一个像素都没有;
+        //    这种窗口被当成可见 → 用户「刚起的应用下拉里没有」。
+        // ② 只看 onscreen 会漏掉「报 ON 但实际被挤掉」的历史情况(2026-09-11 记录)。
+        // 两者与运算恰好覆盖两类:真渲染的必然 onscreen=true 且在带内;其余一律当隐藏列出
+        // (宁可多列也不要漏 —— 下拉列错可点、顶栏少一个才致命)。
+        // 副屏镜像副本按坐标单独处理:x 落在其它屏范围内的收进 `clones`(同项的另一份渲染)。
         let visibleRanges = Self.visibleStatusXRanges(on: targetScreen)
         let secondaryRanges = Self.otherScreenXRanges(excluding: targetScreen)
         struct Win { let num: Int; let x: CGFloat; let width: CGFloat; let winName: String; let isVisible: Bool }
@@ -823,8 +825,9 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
                 clones.append(Win(num: num, x: x, width: wd, winName: winName, isVisible: false))
                 continue
             }
+            let rendered = (w[kCGWindowIsOnscreen as String] as? Bool) == true
             wins.append(Win(num: num, x: x, width: wd, winName: winName,
-                            isVisible: visibleRanges.contains(where: { $0.contains(x) })))
+                            isVisible: rendered && visibleRanges.contains(where: { $0.contains(x) })))
         }
         // 固定成菜单栏的视觉顺序(自右向左),不要直接吃 CGWindowList 的原始顺序 ——
         // 否则菜单条目顺序每次打开都可能不一样
