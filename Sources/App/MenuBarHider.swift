@@ -54,10 +54,8 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
         if on {
             seedPositionsIfNeeded()
             createItems()
-            // 启用后先让图标布局稳定一两秒,再开始辨认匿名隐藏项
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-                self?.runIdentifyPass()
-            }
+            // 不在这里盲跑辨认:AXExtras 命名会在首轮轮询(1-3s)内完成,之后就无需腾位。
+            // 万一仍留有编号行,由轮询里的 maybeStartIdentify 兜底触发(它带编号行前置条件)。
         } else {
             destroyItems()
         }
@@ -1156,10 +1154,21 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
 
     private struct PosEntry { let domain: String; let key: String; let value: Double }
 
+    private let posLock = NSLock()
     private func cachedPosEntries() -> [PosEntry] {
-        if let c=posCache, let d=posCacheDate, Date().timeIntervalSince(d)<8 { return c }
+        posLock.lock()
+        let (c, d) = (posCache, posCacheDate)
+        posLock.unlock()
+        if let c, let d, Date().timeIntervalSince(d) < 8 { return c }
+        // 菜单弹出路径在主线程:绝不同步 fork `defaults find`(实测 0.4-1.2s,期间菜单不开,
+        // 用户以为"点了没反应"再点一下反而把刚开的菜单关掉)。用旧值顶住,后台补新。
+        if Thread.isMainThread {
+            DispatchQueue.global(qos: .utility).async { [weak self] in _ = self?.cachedPosEntries() }
+            return c ?? []
+        }
         let fresh = allPreferredUncached()
-        posCache=fresh; posCacheDate=Date(); return fresh
+        posLock.lock(); posCache = fresh; posCacheDate = Date(); posLock.unlock()
+        return fresh
     }
     private func allPreferredUncached() -> [PosEntry] {
 
