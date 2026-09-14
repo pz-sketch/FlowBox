@@ -25,6 +25,10 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
     /// 窗口号 → 上次成功配到的身份。主屏匿名项的名字靠副屏镜像副本供给,副屏重连时那批
     /// 副本会整个重建(窗口号全换),重建完成前命名断供 —— 主屏窗口号此刻不变,用缓存顶着。
     private var identityCache: [CGWindowID: (title: String, bundleID: String?)] = [:]
+    /// 挤出辨认:进行中标志 / 每个窗口的失败次数(满 5 次放弃,避免为探不到的项反复腾位跳动)/ 防抖时间戳。
+    private var isIdentifying = false
+    private var identifyAttempts: [CGWindowID: Int] = [:]
+    private var lastIdentifyAt: Date?
     /// 状态项窗口缩略图缓存(键 = 窗口号)。
     ///
     /// ⚠️ 不要用 `CGWindowListCreateImage`:它在 macOS 15 起被标记 obsoleted,在 macOS 26 上
@@ -50,6 +54,10 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
         if on {
             seedPositionsIfNeeded()
             createItems()
+            // 启用后先让图标布局稳定一两秒,再开始辨认匿名隐藏项
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.runIdentifyPass()
+            }
         } else {
             destroyItems()
         }
@@ -126,8 +134,9 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
         stopPollingHiddenIcons()
         let refresh: () -> Void = { [weak self] in
             guard let self else { return }
-            // 自愈: 箭头意外丢失(比如上次点了微信走腾位未恢复)则自动重建
-            if self.enabled && self.arrowItem == nil {
+            // 自愈: 箭头意外丢失(比如上次点了微信走腾位未恢复)则自动重建;
+            // 挤出辨认期间箭头是被主动摘下的,不能在这里抢跑复原
+            if self.enabled && self.arrowItem == nil && !self.isIdentifying {
                 DispatchQueue.main.async { [weak self] in self?.restoreArrow(after: 0) }
             }
             if self.isHoveringMenuOrArrow() { return }
@@ -141,6 +150,7 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
                     self.hiddenCache = snap
                     self.hiddenCacheDate = Date()
                     self.warmThumbCache()
+                    self.maybeStartIdentify()
                 }
             }
         }
@@ -334,6 +344,163 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
         }
     }
 
+    // MARK: - 挤出辨认(为匿名隐藏项取真名,AXExtras 的兜底)
+    //
+    // 命名链路优先级:`跨屏副本命名`(多屏)> `AXExtras 位置匹配`(见上,含未渲染项,单屏主力)
+    // > `位置键配对` > `identityCache` > 本节(腾位点射)> 窗口号兜底。
+    //
+    // 本节只在 AXExtras 也拿不到身份时才有活干(例如目标 app 不暴露 AXExtrasMenuBar、
+    // 或未授辅助功能权限):app 自己的 AX 树 / 控制中心的 AX 树都不含状态项按钮(2026-09-14
+    // 实测,树遍历 0 命中),按钮只有在**可见**时才能被坐标点射具现。所以借用腾位机制:
+    // 摘掉自己的箭头(38pt)→ 被挤图标滑进可见区(窗口号不变,与 squeezeOutAndTrigger 同一机制)
+    // → AX 点射拿真身 bundle id → 写 identityCache → 复原。
+    //
+    // 2026-09-14 实测边界:
+    // 1. 真正的「整栏重排」只发生在 FlowBox **启动后一两秒**(状态项重新注册触发系统重新协商);
+    //    之后布局冻结,再摘箭头系统不再重排 —— 首轮辨认机会最好,轮询后续轮次只兜底收编。
+    // 2. 幻影坐标必须防:`kCGWindowIsOnscreen` 为假的窗口常保留「看着在可见区」的 x,
+    //    点射会打到前置应用的菜单栏上 —— 曾实测一整轮 5 个窗口全被误标成同一个前置应用。
+    //    故候选硬要求 onscreen=true,另加「同一 bid 命中多个窗口且等于前置应用 → 整批丢弃」。
+    // 3. 物理上被刘海盖住的左深处项(可见区判定在刘海之外)腾位救不出来:系统按名额计数渲染,
+    //    几何挪不动它们 —— 这类项现在由 AXExtras 直接命名(不受渲染与否影响),本节无需再管。
+
+    /// 轮询回调里判定:快照中仍有「编号兜底行」且不在防抖期,才发起一轮辨认。
+    private func maybeStartIdentify() {
+        guard enabled, !isIdentifying,
+              hiddenCache.contains(where: { $0.bundleID == nil && $0.title.hasPrefix("菜单栏图标") }) else { return }
+        if let l = lastIdentifyAt, Date().timeIntervalSince(l) < 8 { return }
+        DispatchQueue.main.async { [weak self] in self?.runIdentifyPass() }
+    }
+
+    /// 当前「匿名(Item-0/空名)、被挤隐藏、且未辨认未放弃」的窗口集。
+    private func unknownAnonHiddenWindows(on screen: NSScreen) -> [(num: Int, x: CGFloat, width: CGFloat)] {
+        guard let list = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
+        let visibleRanges = Self.visibleStatusXRanges(on: screen)
+        let secondaryRanges = Self.otherScreenXRanges(excluding: screen)
+        let ownNumbers: Set<Int> = [
+            arrowItem?.button?.window?.windowNumber,
+            mainStatusItem?.button?.window?.windowNumber,
+        ].compactMap { $0 }.reduce(into: Set<Int>()) { $0.insert($1) }
+        var out: [(num: Int, x: CGFloat, width: CGFloat)] = []
+        for w in list {
+            guard let owner = w[kCGWindowOwnerName as String] as? String, owner == "控制中心",
+                  let layer = w[kCGWindowLayer as String] as? Int, layer == 25,
+                  let num = w[kCGWindowNumber as String] as? Int else { continue }
+            let winName = w[kCGWindowName as String] as? String ?? ""
+            guard winName == "Item-0" || winName.isEmpty else { continue }
+            if ownNumbers.contains(num) { continue }
+            if identityCache[CGWindowID(num)] != nil { continue }
+            if (identifyAttempts[CGWindowID(num)] ?? 0) >= 5 { continue }
+            guard let b = w[kCGWindowBounds as String] as? [String: Any] else { continue }
+            let x = (b["X"] as? CGFloat) ?? (b["X"] as? Double).map { CGFloat($0) } ?? 0
+            let wd = (b["Width"] as? CGFloat) ?? (b["Width"] as? Double).map { CGFloat($0) } ?? 0
+            if secondaryRanges.contains(where: { $0.contains(x) }) { continue }
+            // 只挑「当前被挤隐藏」的:可见的匿名项不需要腾位就能点射,但不进下拉、无须辨认
+            if visibleRanges.contains(where: { $0.contains(x) }) { continue }
+            out.append((num, x, wd))
+        }
+        return out
+    }
+
+    /// 一轮辨认:摘箭头 → 等重排 → 对滑进可见区的目标窗口 AX 点射 → 记身份 → 复原。
+    private func runIdentifyPass() {
+        guard enabled, !isIdentifying, !isMenuOpen, !isHoveringMenuOrArrow(),
+              let target = Self.mainScreen() else { return }
+        let unknowns = unknownAnonHiddenWindows(on: target)
+        guard !unknowns.isEmpty else { return }
+        lastIdentifyAt = Date()
+        isIdentifying = true
+        let tracked = Set(unknowns.map { $0.num })
+        if let a = arrowItem {
+            a.menu?.delegate = nil
+            NSStatusBar.system.removeStatusItem(a)
+            arrowItem = nil
+        }
+        // 重排 + AX 点射都在后台;点射沿 axIdentities 的既有路径(超时 0.8s/项)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            // 等被挤图标滑进可见区:最多 6×0.25s 重试(与 squeezeOutAndTrigger 同节奏)。
+            // 退出条件看 tracked 本尊 —— 顺手收割的可见匿名项一开始就在,不能当「已滑入」信号。
+            var candidates: [(num: Int, x: CGFloat, width: CGFloat)] = []
+            var trackedRevealed = false
+            for _ in 0..<6 where !trackedRevealed {
+                usleep(250_000)
+                candidates = self.probeCandidates(tracked: tracked, on: target)
+                trackedRevealed = candidates.contains { tracked.contains($0.num) }
+            }
+            let ids = Self.axIdentities(candidates)
+            // 幻影坐标的兜底防线:点射如果落在前置应用的菜单栏上,同一 bid 会「命中」多个窗口 ——
+            // 整批丢弃(前置应用自己恰好有状态项时最多一个窗口命中它,不会触发此规则)
+            var filtered = ids
+            if let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
+                let hits = ids.filter { $0.value == front }
+                if hits.count >= 2 {
+                    for k in hits.keys { filtered.removeValue(forKey: k) }
+                }
+            }
+            var got: [CGWindowID: (title: String, bundleID: String)] = [:]
+            for (num, bid) in filtered
+            where !bid.isEmpty && bid != "com.apple.controlcenter" {
+                let info = self.appDisplayInfo(for: bid)
+                let title = info.title.isEmpty ? bid : info.title
+                got[CGWindowID(num)] = (title, bid)
+            }
+            DispatchQueue.main.async {
+                var identified = 0
+                for (num, ident) in got where self.identityCache[num] == nil {
+                    self.identityCache[num] = (ident.title, ident.bundleID)
+                    identified += 1
+                }
+                for n in tracked where got[CGWindowID(n)] == nil {
+                    self.identifyAttempts[CGWindowID(n), default: 0] += 1
+                }
+                self.restoreArrow(after: 0.1)
+                self.isIdentifying = false
+                FlowLog.menuBar.info("挤出辨认:目标 \(tracked.count) 个,新辨认 \(identified) 个")
+                // 有收获且 tracked 还有剩余:稍等几秒接着下一轮;空手则交给 10s 轮询兜底(带 8s 防抖 + 每窗口 5 次上限)
+                let trackedLeft = tracked.contains { got[CGWindowID($0)] == nil }
+                if identified > 0, trackedLeft {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                        self?.runIdentifyPass()
+                    }
+                }
+            }
+        }
+    }
+
+    /// 点射候选 = 「tracked 中已滑进可见区的」+「顺手收割的可见匿名项(还没身份的)」。
+    /// 硬要求 `onscreen=true` 且窗口中心真落在可见区 —— 被挤掉的窗口常保留「幻影 x」,
+    /// 位置看着在可见区、像素上却没有渲染,点射会打到前置应用的菜单栏上(实测:一整轮 5 个窗口
+    /// 全被误标成 com.jetbrains.intellij)。宁可这一轮不认,也不写错名字。
+    private func probeCandidates(tracked: Set<Int>, on screen: NSScreen) -> [(num: Int, x: CGFloat, width: CGFloat)] {
+        guard let list = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
+        let ranges = Self.visibleStatusXRanges(on: screen)
+        let ownNumbers: Set<Int> = [
+            arrowItem?.button?.window?.windowNumber,
+            mainStatusItem?.button?.window?.windowNumber,
+        ].compactMap { $0 }.reduce(into: Set<Int>()) { $0.insert($1) }
+        var out: [(num: Int, x: CGFloat, width: CGFloat)] = []
+        for w in list {
+            guard let owner = w[kCGWindowOwnerName as String] as? String, owner == "控制中心",
+                  let layer = w[kCGWindowLayer as String] as? Int, layer == 25,
+                  let num = w[kCGWindowNumber as String] as? Int else { continue }
+            let winName = w[kCGWindowName as String] as? String ?? ""
+            let anon = winName == "Item-0" || winName.isEmpty
+            guard tracked.contains(num) || (anon && identityCache[CGWindowID(num)] == nil) else { continue }
+            if winName.hasPrefix("FlowBox") { continue }
+            if ownNumbers.contains(num) { continue }
+            guard (w[kCGWindowIsOnscreen as String] as? Bool) == true else { continue }
+            guard let b = w[kCGWindowBounds as String] as? [String: Any] else { continue }
+            let x = (b["X"] as? CGFloat) ?? (b["X"] as? Double).map { CGFloat($0) } ?? 0
+            let wd = (b["Width"] as? CGFloat) ?? (b["Width"] as? Double).map { CGFloat($0) } ?? 0
+            let center = x + wd / 2
+            if ranges.contains(where: { $0.contains(center) }) {
+                out.append((num, x, wd))
+            }
+        }
+        return out
+    }
+
     private struct HiddenInfo {
         let windowNumber: CGWindowID
         let title: String
@@ -520,6 +687,99 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
             .map { $0.frame.minX...$0.frame.maxX }
     }
 
+    // MARK: - 状态项真实坐标(AXExtrasMenuBar)
+    //
+    // 2026-09-14 实测:每个 app 的 AX 元素带 `AXExtrasMenuBar` 专有属性,其 children 就是该 app
+    // 的状态项按钮 —— **即使图标被刘海/容量挤掉、根本没渲染,该属性依然报出布局坐标**
+    // (x 与 CGWindow 窗口的 X 误差 ≤1pt;系统项 ≤8pt)。这比「腾位 + 可见点射」和位置键推断
+    // 都直接:匿名隐藏项(Item-0)因此能拿到真身 bundle id,不再只显示窗口号。
+    // 需要辅助功能权限;未授权时返回空,调用方退回既有链路(跨屏副本命名/位置键/挤位辨认)。
+    private let extrasLock = NSLock()
+    private var extrasItemsCache: [(bid: String, x: CGFloat, width: CGFloat)]?
+    private var extrasItemsCacheDate: Date?
+
+    private func currentExtrasCache() -> ([(bid: String, x: CGFloat, width: CGFloat)]?, Date?) {
+        extrasLock.lock(); defer { extrasLock.unlock() }
+        return (extrasItemsCache, extrasItemsCacheDate)
+    }
+
+    private func storeExtrasCache(_ v: [(bid: String, x: CGFloat, width: CGFloat)]) {
+        extrasLock.lock(); extrasItemsCache = v; extrasItemsCacheDate = Date(); extrasLock.unlock()
+    }
+
+    /// 取 AXExtras 条目。**后台调用者**(10s 轮询)直接查,带 8s TTL;
+    /// **主线程**(菜单弹出路径)只读缓存、过期就让后台补 —— 枚举要遍历几十个 app(1-3s),
+    /// 绝不能卡住菜单弹出。首轮无缓存时退回既有命名链路,下一轮轮询即补上。
+    private func extrasItems() -> [(bid: String, x: CGFloat, width: CGFloat)] {
+        let (cached, date) = currentExtrasCache()
+        if let c = cached, let d = date, Date().timeIntervalSince(d) < 8 { return c }
+        if Thread.isMainThread {
+            DispatchQueue.global(qos: .utility).async { [weak self] in _ = self?.fetchExtrasItems() }
+            return cached ?? []
+        }
+        return fetchExtrasItems()
+    }
+
+    /// 真正的 AX 枚举(只应在后台线程调用;逐 app 查询,多数 app 无该属性会快速失败)。
+    private func fetchExtrasItems() -> [(bid: String, x: CGFloat, width: CGFloat)] {
+        let (cached, date) = currentExtrasCache()
+        if let c = cached, let d = date, Date().timeIntervalSince(d) < 8 { return c }
+        var out: [(bid: String, x: CGFloat, width: CGFloat)] = []
+        for app in NSWorkspace.shared.runningApplications {
+            guard let bid = app.bundleIdentifier, !bid.isEmpty else { continue }
+            let ax = AXUIElementCreateApplication(app.processIdentifier)
+            AXUIElementSetMessagingTimeout(ax, 0.5)
+            var ref: CFTypeRef?
+            var err = AXUIElementCopyAttributeValue(ax, "AXExtrasMenuBar" as CFString, &ref)
+            if err == .cannotComplete {
+                // 个别 app 首次查询超时(实测奇安信天擎),放宽超时重试一次即返回
+                AXUIElementSetMessagingTimeout(ax, 1.5)
+                err = AXUIElementCopyAttributeValue(ax, "AXExtrasMenuBar" as CFString, &ref)
+            }
+            guard err == .success, let bar = ref else { continue }
+            let barEl = unsafeBitCast(bar, to: AXUIElement.self)
+            var kidsRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(barEl, kAXChildrenAttribute as CFString, &kidsRef) == .success,
+                  let kids = kidsRef.flatMap({ $0 as? [AXUIElement] }) else { continue }
+            for k in kids {
+                var posRef: CFTypeRef?, sizeRef: CFTypeRef?
+                AXUIElementCopyAttributeValue(k, kAXPositionAttribute as CFString, &posRef)
+                AXUIElementCopyAttributeValue(k, kAXSizeAttribute as CFString, &sizeRef)
+                var p = CGPoint.zero, s = CGSize.zero
+                if let pr = posRef { AXValueGetValue(unsafeBitCast(pr, to: AXValue.self), .cgPoint, &p) }
+                if let sr = sizeRef { AXValueGetValue(unsafeBitCast(sr, to: AXValue.self), .cgSize, &s) }
+                // 未参与布局的占位条目(x=0/y=屏高、0 尺寸)丢弃
+                guard s.width > 4, p.y < 40 else { continue }
+                out.append((bid, p.x, s.width))
+            }
+        }
+        storeExtrasCache(out)
+        return out
+    }
+
+    /// 匿名窗口 ↔ AXExtras 条目按 x 双向最近匹配(Δ≤12pt 且互为最近才认,杜绝张冠李戴)。
+    private func extrasIdentities(for anon: [(num: Int, x: CGFloat)]) -> [Int: String] {
+        let items = extrasItems()
+        guard !items.isEmpty, !anon.isEmpty else { return [:] }
+        var map: [Int: String] = [:]
+        var used = Set<Int>()
+        for w in anon {
+            var best = -1
+            var bestD = CGFloat.greatestFiniteMagnitude
+            for (i, it) in items.enumerated() where !used.contains(i) {
+                let d = abs(it.x - w.x)
+                if d < bestD { bestD = d; best = i }
+            }
+            guard best >= 0, bestD <= 12 else { continue }
+            let it = items[best]
+            let nearest = anon.min { abs(it.x - $0.x) < abs(it.x - $1.x) }
+            guard nearest?.num == w.num, !it.bid.isEmpty else { continue }
+            used.insert(best)
+            map[w.num] = it.bid
+        }
+        return map
+    }
+
     /// - Parameter target: 下拉在哪块屏弹出就判定哪块屏的隐藏项(点副屏箭头 → 副屏语境);
     ///   nil 表示默认语境(轮询预热用主屏)。
     private func buildHiddenList(target: NSScreen? = nil) -> [HiddenInfo] {
@@ -571,6 +831,15 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
         // 固定成菜单栏的视觉顺序(自右向左),不要直接吃 CGWindowList 的原始顺序 ——
         // 否则菜单条目顺序每次打开都可能不一样
         wins.sort { $0.x > $1.x }
+
+        // 匿名窗口 → AXExtras 真身(位置匹配,含被刘海挤掉、未渲染的项)。单屏下这是主力来源;
+        // 跨屏副本命名若已有结论则以跨屏为准(那条链路带宽度硬约束 + AX 锚点校正)
+        let anonWins = wins.filter { !StatusItemPairing.isIdentifiableName($0.winName) }
+        let extrasName = extrasIdentities(for: anonWins.map { (num: $0.num, x: $0.x) })
+        if !extrasName.isEmpty {
+            let dump = extrasName.sorted { $0.key < $1.key }.map { "\($0.key)→\($0.value)" }.joined(separator: ", ")
+            FlowLog.menuBar.info("AXExtras 命名 \(extrasName.count) 项:\(dump, privacy: .public)")
+        }
 
         // 防瞬变兜底:显示链路重协商的瞬间,目标屏锚定会短暂翻到另一块屏再翻回。
         // 单轮采样恰好落在窗口内时,整列表变成「镜像当真身」。这种翻转的指纹是目标屏窗口号
@@ -709,8 +978,10 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
             // 点击靠 windowNumber、与图标无关,绝不能因为"截不到图"就把条目丢掉(曾因此把菜单清空)。
             // 标题永远非空(MenuLabel.fallbackTitle):不许出现 `?` 行,包名/窗口名都可以显示。
             let shot = thumbCache[CGWindowID(w.num)]
-            var resolvedBID: String? = cloneName[w.num]
-            if let donor = cloneName[w.num] {
+            // 身份来源优先级:跨屏副本命名(带宽度约束)> AXExtras 位置匹配(真身,含未渲染项)
+            let donorName = cloneName[w.num] ?? extrasName[w.num]
+            var resolvedBID: String? = donorName
+            if let donor = donorName {
                 // 跨屏副本给出的身份通常就是 autosaveName/bundle id。能**精确**反查到应用就用应用
                 // 自己的名字(QQ / 微信 / WorkBuddy)与图标;反查不到(系统项 `WiFi` 等)原样用它 ——
                 // 绝不做模糊匹配,免得被 /Applications 里名字相近的 App 串味。
@@ -785,6 +1056,7 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
         // live 集合要含 clones:副屏语境下主屏窗口全在 clones 里,只按 wins 清会把主屏身份缓存误删
         let liveIDs = Set((wins + clones).map { CGWindowID($0.num) })
         identityCache = identityCache.filter { liveIDs.contains($0.key) }
+        identifyAttempts = identifyAttempts.filter { liveIDs.contains($0.key) }
         let dump = out.map { "\($0.title)/\($0.windowNumber)" }.joined(separator: ", ")
         FlowLog.menuBar.info("隐藏项 \(out.count) 个:\(dump, privacy: .public)")
         return out
