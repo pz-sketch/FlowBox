@@ -136,8 +136,10 @@ Permissions are controlled by macOS. FlowBox does not bypass system authorizatio
 - Configuration is stored at:
 
 ```text
-~/Library/Containers/net.ai2048.flowbox.ext/Data/Library/Application Support/FlowBox/config.json
+~/Library/Application Support/FlowBox/config.json
 ```
+
+> Versions up to 1.0.4 stored the config inside the Finder extension's sandbox container; FlowBox migrates it to the path above on first launch.
 
 ### FAQ
 
@@ -159,12 +161,13 @@ A local ad-hoc build is not intended as a cross-machine installer. Cross-machine
 
 ### Uninstall
 
-Quit FlowBox, remove the app and its container data, then disable the Finder extension in System Settings:
+Quit FlowBox, remove the app, its configuration, and the extension's sandbox container, then disable the Finder extension in System Settings:
 
 ```bash
 killall FlowBox 2>/dev/null || true
 rm -rf /Applications/FlowBox.app
 rm -rf ~/Applications/FlowBox.app
+rm -rf "$HOME/Library/Application Support/FlowBox"
 rm -rf ~/Library/Containers/net.ai2048.flowbox.ext
 ```
 
@@ -353,8 +356,10 @@ FlowBox 按功能请求 macOS 权限，不同功能不需要全部授权：
 - 配置文件位于：
 
 ```text
-~/Library/Containers/net.ai2048.flowbox.ext/Data/Library/Application Support/FlowBox/config.json
+~/Library/Application Support/FlowBox/config.json
 ```
+
+> 1.0.4 及以前配置放在 Finder 扩展的沙盒容器里，首次启动时会自动迁移到上面的位置。
 
 ### 常见问题
 
@@ -376,12 +381,13 @@ FlowBox 按功能请求 macOS 权限，不同功能不需要全部授权：
 
 ### 卸载
 
-退出 FlowBox 后删除应用和容器数据，然后在系统设置中关闭 Finder 扩展：
+退出 FlowBox 后删除应用、配置和扩展沙盒容器，然后在系统设置中关闭 Finder 扩展：
 
 ```bash
 killall FlowBox 2>/dev/null || true
 rm -rf /Applications/FlowBox.app
 rm -rf ~/Applications/FlowBox.app
+rm -rf "$HOME/Library/Application Support/FlowBox"
 rm -rf ~/Library/Containers/net.ai2048.flowbox.ext
 ```
 
