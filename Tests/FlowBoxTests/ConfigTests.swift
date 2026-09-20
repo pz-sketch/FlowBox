@@ -13,7 +13,8 @@ struct ConfigTests {
         #expect(abs(cfg.scroll.minStep - 60) < 0.01)
         #expect(abs(cfg.screenshot.penWidth - 4) < 0.01)
         #expect(cfg.recording.frameRate == 30)
-        #expect(cfg.presence.enabled == false)
+        // 1.0.5 起默认开启人脸看守与流畅滚动（见 AppConfig.defaultConfig）
+        #expect(cfg.presence.enabled == true)
         #expect(abs(cfg.presence.lockAfterSeconds - 8) < 0.01)
         #expect(abs(cfg.presence.confirmAfterSeconds - 60) < 0.01)
         #expect(abs(cfg.presence.gracePeriod - 15) < 0.01)
@@ -126,8 +127,9 @@ struct ConfigTests {
     @Test
     func configStoreURL() {
         let url = ConfigStore.configURL
-        #expect(url.path.contains("Library/Containers"))
-        #expect(url.path.contains("net.ai2048.flowbox.ext"))
+        #expect(url.path.contains("Library/Application Support/FlowBox"))
         #expect(url.path.hasSuffix("config.json"))
+        // 旧容器位置只作为迁移源保留
+        #expect(ConfigStore.extContainerConfigURL.path.contains("net.ai2048.flowbox.ext"))
     }
 }
