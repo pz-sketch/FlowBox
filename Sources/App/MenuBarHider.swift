@@ -365,7 +365,7 @@ final class MenuBarHider: NSObject, NSMenuDelegate {
     /// 轮询回调里判定:快照中仍有「编号兜底行」且不在防抖期,才发起一轮辨认。
     private func maybeStartIdentify() {
         guard enabled, !isIdentifying,
-              hiddenCache.contains(where: { $0.bundleID == nil && $0.title.hasPrefix("菜单栏图标") }) else { return }
+              hiddenCache.contains(where: { $0.bundleID == nil && MenuLabel.isAnonymousFallback($0.title) }) else { return }
         if let l = lastIdentifyAt, Date().timeIntervalSince(l) < 8 { return }
         DispatchQueue.main.async { [weak self] in self?.runIdentifyPass() }
     }

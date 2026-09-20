@@ -328,11 +328,16 @@ do {
     check(MenuLabel.containsCJK("输入法"), "detects cjk characters")
     check(!MenuLabel.containsCJK("Autofill"), "rejects pure ascii text")
     // 标题兜底:永远非空,不许出现空标题/`?` 行(包名/窗口名都可以显示)
+    // 匿名兜底名走 L10n,期望值用同一来源计算,中英文 CI 环境都稳定
+    let anon = { (n: Int) in L10n.tr(MenuLabel.anonymousPrefixes[0], MenuLabel.anonymousPrefixes[1]) + " \(n)" }
     checkEq(MenuLabel.fallbackTitle(winName: "com.tencent.qq", bundleID: nil, windowNumber: 1), "com.tencent.qq", "fallback shows package name as-is")
     checkEq(MenuLabel.fallbackTitle(winName: "  电池  ", bundleID: nil, windowNumber: 2), "电池", "fallback trims whitespace")
-    checkEq(MenuLabel.fallbackTitle(winName: "Item-0", bundleID: nil, windowNumber: 8617), "菜单栏图标 8617", "fallback disambiguates anonymous items by window number")
+    checkEq(MenuLabel.fallbackTitle(winName: "Item-0", bundleID: nil, windowNumber: 8617), anon(8617), "fallback disambiguates anonymous items by window number")
     checkEq(MenuLabel.fallbackTitle(winName: "", bundleID: "com.tencent.qq", windowNumber: 3), "com.tencent.qq", "fallback uses bundleID for empty window name")
-    checkEq(MenuLabel.fallbackTitle(winName: "", bundleID: nil, windowNumber: 4), "菜单栏图标 4", "fallback never returns empty")
+    checkEq(MenuLabel.fallbackTitle(winName: "", bundleID: nil, windowNumber: 4), anon(4), "fallback never returns empty")
+    check(MenuLabel.isAnonymousFallback(anon(7)), "anonymous fallback title is recognized bilingually")
+    check(!MenuLabel.isAnonymousFallback("电池"), "named item is not an anonymous fallback")
+    check(!MenuLabel.isAnonymousFallback("Menu bar icon"), "prefix without number is not a fallback")
 }
 
 // 状态项配对:跨屏副本命名 + 位置键宽度自检(两条都必须「宁缺毋滥」)

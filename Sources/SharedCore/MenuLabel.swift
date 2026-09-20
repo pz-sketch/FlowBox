@@ -33,9 +33,23 @@ public enum MenuLabel {
         return anonymousLabel(windowNumber)
     }
 
+    /// 匿名状态项显示名的前缀（双语——运行时指纹判断与测试都必须覆盖两种语言）
+    public static let anonymousPrefixes = ["菜单栏图标", "Menu bar icon"]
+
     /// 匿名状态项的显示名（双语，避免英文系统下兜底行仍是中文）
     private static func anonymousLabel(_ windowNumber: Int) -> String {
-        L10n.tr("菜单栏图标", "Menu bar icon") + " \(windowNumber)"
+        L10n.tr(anonymousPrefixes[0], anonymousPrefixes[1]) + " \(windowNumber)"
+    }
+
+    /// 标题是否为匿名兜底行（「菜单栏图标 N」/「Menu bar icon N」,末尾纯数字）。
+    /// 运行时指纹判断（如收纳辨认的触发条件）应使用本函数,不可对某一语言写死前缀。
+    public static func isAnonymousFallback(_ title: String) -> Bool {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        for prefix in anonymousPrefixes where t.hasPrefix(prefix) {
+            let rest = t.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
+            return !rest.isEmpty && rest.allSatisfy { $0.isNumber }
+        }
+        return false
     }
 
     /// 是否含 CJK 字符（汉字本体、扩展 A、兼容区、中文标点、全角块）。
