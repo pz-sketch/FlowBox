@@ -93,16 +93,16 @@ enum PermissionManager {
 
     // MARK: - 诊断
 
-    /// 返回人类可读的权限状态,用于设置页展示
+    /// 返回人类可读的权限状态,用于设置页展示（不带 emoji，状态由界面上的状态药丸/颜色表达）
     static func accessibilityStatusText() -> (text: String, ok: Bool) {
         if isAccessibilityTrusted {
-            return canCreateEventTap() ? (L10n.tr("✅ 已授权", "✅ Granted"), true) : (L10n.tr("⚠️ 辅助功能已开,但输入监控未开或需重启", "⚠️ Accessibility on, but Input Monitoring off or restart required"), false)
+            return canCreateEventTap() ? (L10n.tr("已授权", "Granted"), true) : (L10n.tr("辅助功能已开,但输入监控未开或需重启", "Accessibility on, but Input Monitoring off or restart required"), false)
         }
-        return (L10n.tr("⚠️ 未授权", "⚠️ Not granted"), false)
+        return (L10n.tr("未授权", "Not granted"), false)
     }
 
     static func screenCaptureStatusText() -> (text: String, ok: Bool) {
-        isScreenCaptureTrusted ? (L10n.tr("✅ 已授权", "✅ Granted"), true) : (L10n.tr("⚠️ 未授权", "⚠️ Not granted"), false)
+        isScreenCaptureTrusted ? (L10n.tr("已授权", "Granted"), true) : (L10n.tr("未授权", "Not granted"), false)
     }
 
     // MARK: - 摄像头 - 人脸看守/录屏画中画必需
@@ -123,13 +123,13 @@ enum PermissionManager {
     static func cameraStatusText() -> (text: String, ok: Bool) {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
-            return (L10n.tr("✅ 已授权", "✅ Granted"), true)
+            return (L10n.tr("已授权", "Granted"), true)
         case .notDetermined:
             return (L10n.tr("尚未请求,开启看守时弹窗", "Not requested yet — prompts on enable"), false)
         case .denied, .restricted:
-            return (L10n.tr("⚠️ 未授权,请在系统设置中允许", "⚠️ Denied — allow in System Settings"), false)
+            return (L10n.tr("未授权,请在系统设置中允许", "Denied — allow in System Settings"), false)
         @unknown default:
-            return (L10n.tr("⚠️ 未知状态", "⚠️ Unknown"), false)
+            return (L10n.tr("未知状态", "Unknown"), false)
         }
     }
 

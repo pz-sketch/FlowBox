@@ -304,8 +304,8 @@ final class ScreenshotSession: NSObject {
 final class ToastWindow: NSPanel {
 
     static func show(text: String, at center: NSPoint) {
-        let font = UIStyle.Text.body(.medium)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
+        let font = UIStyle.Text.hudText(12, weight: .medium)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIStyle.Palette.HUD.text]
         let textSize = (text as NSString).size(withAttributes: attrs)
         let padding: CGFloat = 18
         let boxW = textSize.width + padding * 2
@@ -313,14 +313,14 @@ final class ToastWindow: NSPanel {
 
         let container = NSView(frame: NSRect(x: 0, y: 0, width: boxW, height: boxH))
         container.wantsLayer = true
-        container.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.76).cgColor
+        container.layer?.backgroundColor = UIStyle.Palette.HUD.toastFill.cgColor
         container.layer?.cornerRadius = UIStyle.Metrics.radiusM
         container.layer?.cornerCurve = .continuous
         container.layer?.borderWidth = 1
-        container.layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
+        container.layer?.borderColor = UIStyle.Palette.HUD.panelBorder.cgColor
         let label = NSTextField(labelWithString: text)
         label.font = font
-        label.textColor = .white
+        label.textColor = UIStyle.Palette.HUD.text
         label.frame = NSRect(
             x: padding,
             y: (boxH - textSize.height) / 2,
@@ -482,7 +482,7 @@ final class OverlayView: NSView {
         }
     }
 
-    private static let toolbarFont = NSFont.systemFont(ofSize: 11, weight: .medium)
+    private static let toolbarFont = UIStyle.Text.hudText(11, weight: .medium)
 
     /// 由当前选区计算工具条布局(选区下方,放不下移到上方)
     /// 返回:面板 rect(相对 view 原点的绝对坐标)、按钮在 view 坐标系中的 rect 列表
@@ -980,9 +980,9 @@ final class OverlayView: NSView {
                 self?.endTextInput(confirm: false)
             }
         )
-        field.font = NSFont.systemFont(ofSize: OverlayView.textFontSize, weight: .semibold)
+        field.font = UIStyle.Text.hudText(OverlayView.textFontSize)
         field.textColor = penColor
-        field.backgroundColor = NSColor.black.withAlphaComponent(0.35)
+        field.backgroundColor = UIStyle.Palette.HUD.scrim
         field.drawsBackground = true
         field.isBordered = false
         field.focusRingType = .exterior
@@ -1039,7 +1039,7 @@ final class OverlayView: NSView {
 
         if chrome, let sel = selectionRect {
             // 选区外压暗
-            ctx.setFillColor(NSColor.black.withAlphaComponent(0.35).cgColor)
+            ctx.setFillColor(UIStyle.Palette.HUD.scrim.cgColor)
             ctx.addRect(bounds)
             ctx.addRect(sel)
             ctx.fillPath(using: .evenOdd)
@@ -1059,7 +1059,7 @@ final class OverlayView: NSView {
 
         if let sel = selectionRect {
             // 边框
-            ctx.setStrokeColor(NSColor.white.cgColor)
+            ctx.setStrokeColor(UIStyle.Palette.HUD.selectionStroke.cgColor)
             ctx.setLineWidth(1.5)
             ctx.stroke(sel)
             // 四角手柄
@@ -1072,9 +1072,9 @@ final class OverlayView: NSView {
             ]
             for corner in corners {
                 let r = CGRect(x: corner.x - h / 2, y: corner.y - h / 2, width: h, height: h)
-                ctx.setFillColor(NSColor.white.cgColor)
+                ctx.setFillColor(UIStyle.Palette.HUD.selectionStroke.cgColor)
                 ctx.fill(r)
-                ctx.setStrokeColor(NSColor.black.withAlphaComponent(0.45).cgColor)
+                ctx.setStrokeColor(UIStyle.Palette.HUD.selectionHandleShadow.cgColor)
                 ctx.setLineWidth(1)
                 ctx.stroke(r)
             }
@@ -1097,21 +1097,22 @@ final class OverlayView: NSView {
     /// 在覆盖层内绘制工具条(选区下方,越界移到上方) — 亮色高对比方案
     private func drawToolbar() {
         guard let (tbRect, buttons) = toolbarLayout() else { return }
+        let hud = UIStyle.Palette.HUD.self
         // 亮色磨砂底板:白底高不透明 + 柔和投影,在压暗(0.35)背景上清晰可辨
         NSGraphicsContext.saveGraphicsState()
         let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.22)
+        shadow.shadowColor = hud.shadow
         shadow.shadowOffset = NSSize(width: 0, height: 6)
         shadow.shadowBlurRadius = 16
         shadow.set()
-        NSColor.white.withAlphaComponent(0.94).setFill()
+        hud.toolbarFill.setFill()
         let bgPath = NSBezierPath(roundedRect: tbRect, xRadius: 11, yRadius: 11)
         bgPath.fill()
         NSGraphicsContext.restoreGraphicsState()
         // 双层细描边提升立体感
-        NSColor.black.withAlphaComponent(0.10).setStroke()
+        hud.toolbarBorderOuter.setStroke()
         NSBezierPath(roundedRect: tbRect.insetBy(dx: 0.5, dy: 0.5), xRadius: 11, yRadius: 11).stroke()
-        NSColor.white.withAlphaComponent(0.65).setStroke()
+        hud.toolbarBorderInner.setStroke()
         NSBezierPath(roundedRect: tbRect.insetBy(dx: 1.5, dy: 1.5), xRadius: 10, yRadius: 10).stroke()
 
         // 绘图工具分组:浅灰 pill 底座 + 细分隔线
@@ -1121,14 +1122,14 @@ final class OverlayView: NSView {
             let firstR = buttons[firstIdx].1
             let lastR = buttons[lastIdx].1
             let groupRect = NSRect(x: firstR.minX - 4, y: firstR.minY - 4, width: lastR.maxX - firstR.minX + 8, height: firstR.height + 8)
-            NSColor.black.withAlphaComponent(0.06).setFill()
+            hud.groupFill.setFill()
             NSBezierPath(roundedRect: groupRect, xRadius: 8, yRadius: 8).fill()
-            NSColor.black.withAlphaComponent(0.07).setStroke()
+            hud.groupBorder.setStroke()
             NSBezierPath(roundedRect: groupRect.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8).stroke()
             for idx in [firstIdx + 1, lastIdx] {
                 if idx <= lastIdx {
                     let rx = buttons[idx].1.minX - 2.5
-                    NSColor.black.withAlphaComponent(0.10).setFill()
+                    hud.groupDivider.setFill()
                     NSBezierPath(roundedRect: NSRect(x: rx, y: groupRect.midY - 8, width: 1, height: 16), xRadius: 0.5, yRadius: 0.5).fill()
                 }
             }
@@ -1146,20 +1147,20 @@ final class OverlayView: NSView {
 
             // 选中态:用系统强调色浅底,比白底更醒目
             if isActive {
-                NSColor.controlAccentColor.withAlphaComponent(0.15).setFill()
+                hud.iconActiveFill.setFill()
                 NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6).fill()
-                NSColor.controlAccentColor.withAlphaComponent(0.22).setStroke()
+                hud.iconActiveBorder.setStroke()
                 NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6).stroke()
             }
             if isConfirm {
-                NSColor.systemGreen.withAlphaComponent(0.95).setFill()
+                hud.confirmFill.setFill()
                 NSBezierPath(roundedRect: r, xRadius: 6, yRadius: 6).fill()
             } else if action == .cancel {
                 // 取消用浅灰底,避免与确认同权重
-                NSColor.black.withAlphaComponent(0.06).setFill()
+                hud.groupFill.setFill()
                 NSBezierPath(roundedRect: r, xRadius: 6, yRadius: 6).fill()
             } else if isOCR && isOCRing {
-                NSColor.black.withAlphaComponent(0.06).setFill()
+                hud.groupFill.setFill()
                 NSBezierPath(roundedRect: r, xRadius: 6, yRadius: 6).fill()
             }
 
@@ -1169,11 +1170,11 @@ final class OverlayView: NSView {
                 let iconRect = NSRect(x: r.midX - iconSize / 2, y: r.midY - iconSize / 2, width: iconSize, height: iconSize)
                 let iconColor: NSColor
                 if isConfirm {
-                    iconColor = NSColor.white.withAlphaComponent(dimmed ? 0.4 : 1)
+                    iconColor = dimmed ? hud.text.withAlphaComponent(0.4) : hud.text
                 } else if isActive {
-                    iconColor = NSColor.controlAccentColor.withAlphaComponent(dimmed ? 0.45 : 1)
+                    iconColor = dimmed ? hud.iconActive.withAlphaComponent(0.45) : hud.iconActive
                 } else {
-                    iconColor = NSColor.labelColor.withAlphaComponent(dimmed ? 0.32 : 0.88)
+                    iconColor = dimmed ? hud.textOnLightDim : hud.textOnLight
                 }
                 // isFlipped=true 的视图里直接 draw 会垂直镜像,checkmark 这类不对称符号会显成"反钩"
                 // 用 respectFlipped:true 保证朝向正确;同时先 set 颜色让模板按该色着染
@@ -1189,12 +1190,13 @@ final class OverlayView: NSView {
     /// 绘制马赛克刷头预览圆圈(跟随鼠标)
     private func drawMosaicPreview() {
         guard tool == .mosaic, let p = mosaicPreviewPoint, phase == .annotating, currentStroke == nil else { return }
+        let hud = UIStyle.Palette.HUD.self
         let r = max(20, penWidth * 5) / 2
-        NSColor.white.setStroke()
+        hud.selectionStroke.setStroke()
         let path = NSBezierPath(ovalIn: NSRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2))
         path.lineWidth = 1.5
         path.stroke()
-        NSColor.black.withAlphaComponent(0.5).setStroke()
+        hud.selectionHandleShadow.setStroke()
         let inner = NSBezierPath(ovalIn: NSRect(x: p.x - r + 0.5, y: p.y - r + 0.5, width: r * 2 - 1, height: r * 2 - 1))
         inner.lineWidth = 1
         inner.stroke()
@@ -1241,10 +1243,10 @@ final class OverlayView: NSView {
         case .text:
             // 白描边打底保证任何背景上可读,再用画笔色填充
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: stroke.fontSize, weight: .semibold),
+                .font: UIStyle.Text.hudText(stroke.fontSize),
                 .foregroundColor: NSColor(cgColor: stroke.color) ?? .red,
                 .strokeWidth: -4.0,
-                .strokeColor: NSColor.white,
+                .strokeColor: UIStyle.Palette.HUD.text,
             ]
             ((stroke.text ?? "") as NSString).draw(at: stroke.points[0], withAttributes: attrs)
         case .rect:
@@ -1266,9 +1268,10 @@ final class OverlayView: NSView {
     }
 
     private func drawIdleHint(at point: NSPoint) {
-        let font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        let hud = UIStyle.Palette.HUD.self
+        let font = UIStyle.Text.hudText(15)
         let text = L10n.tr("拖动框选截图区域  ·  Enter / 确认 复制  ·  Esc / 右键 取消", "Drag to select  ·  Enter to copy  ·  Esc / Right-click to cancel")
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: hud.text]
         let size = (text as NSString).size(withAttributes: attrs)
         let pad: CGFloat = 12
         let boxW = size.width + pad * 2
@@ -1276,14 +1279,15 @@ final class OverlayView: NSView {
         var boxX = point.x - boxW / 2
         boxX = max(8, min(boxX, bounds.width - boxW - 8))
         let boxY = point.y - pad / 2
-        NSColor.black.withAlphaComponent(0.72).setFill()
+        hud.scrimStrong.setFill()
         NSBezierPath(roundedRect: NSRect(x: boxX, y: boxY, width: boxW, height: boxH), xRadius: 9, yRadius: 9).fill()
         (text as NSString).draw(at: NSPoint(x: boxX + pad, y: boxY + pad / 2), withAttributes: attrs)
     }
 
     private func drawLabel(_ text: String, at point: NSPoint, centered: Bool = false) {
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
+        let hud = UIStyle.Palette.HUD.self
+        let font = UIStyle.Text.hudMono(11)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: hud.text]
         let size = (text as NSString).size(withAttributes: attrs)
         let pad: CGFloat = 7
         let boxW = size.width + pad * 2
@@ -1292,7 +1296,7 @@ final class OverlayView: NSView {
         if centered { boxX = point.x - boxW / 2 }
         boxX = max(4, min(boxX, bounds.width - boxW - 4))
         let boxY = max(4, point.y - pad / 2)
-        NSColor.black.withAlphaComponent(0.6).setFill()
+        hud.labelFill.setFill()
         NSBezierPath(roundedRect: NSRect(x: boxX, y: boxY, width: boxW, height: boxH), xRadius: 5, yRadius: 5).fill()
         (text as NSString).draw(at: NSPoint(x: boxX + pad, y: boxY + pad / 2), withAttributes: attrs)
     }

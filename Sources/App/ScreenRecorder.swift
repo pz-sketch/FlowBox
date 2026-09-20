@@ -807,9 +807,10 @@ private final class CameraPreviewPanel: NSPanel {
 
         container.frame = NSRect(x: 0, y: 0, width: w, height: h)
         container.wantsLayer = true
-        container.layer?.cornerRadius = cfg.cameraIsCircle ? h / 2 : 12
+        container.layer?.cornerRadius = cfg.cameraIsCircle ? h / 2 : UIStyle.Metrics.radiusL
+        container.layer?.cornerCurve = .continuous
         container.layer?.masksToBounds = true
-        container.layer?.borderColor = NSColor.white.cgColor
+        container.layer?.borderColor = UIStyle.Palette.HUD.text.cgColor
         container.layer?.borderWidth = 2
         container.layer?.backgroundColor = NSColor.black.cgColor
         contentView = container
@@ -827,8 +828,8 @@ private final class CameraPreviewPanel: NSPanel {
             previewLayer = layer
         } else {
             let label = NSTextField(labelWithString: L10n.tr("摄像头不可用", "Camera Unavailable"))
-            label.font = .systemFont(ofSize: 12, weight: .medium)
-            label.textColor = .white
+            label.font = UIStyle.Text.hudText(12, weight: .medium)
+            label.textColor = UIStyle.Palette.HUD.text
             label.alignment = .center
             label.frame = NSRect(x: 0, y: h/2 - 10, width: w, height: 20)
             label.autoresizingMask = [.width, .minYMargin, .maxYMargin]
@@ -837,14 +838,14 @@ private final class CameraPreviewPanel: NSPanel {
 
         // 提示
         let hint = NSTextField(labelWithString: L10n.tr("拖动可移动 · 位置会记忆", "Drag to move · Position is remembered"))
-        hint.font = .systemFont(ofSize: 10, weight: .medium)
-        hint.textColor = .white
-        hint.backgroundColor = NSColor.black.withAlphaComponent(0.55)
+        hint.font = UIStyle.Text.hudText(10, weight: .medium)
+        hint.textColor = UIStyle.Palette.HUD.text
+        hint.backgroundColor = UIStyle.Palette.HUD.hintFill
         hint.drawsBackground = true
         hint.isBezeled = false
         hint.alignment = .center
         hint.wantsLayer = true
-        hint.layer?.cornerRadius = 6
+        hint.layer?.cornerRadius = UIStyle.Metrics.hudRadiusS
         hint.layer?.masksToBounds = true
         hint.frame = NSRect(x: 6, y: 6, width: w - 12, height: 18)
         hint.autoresizingMask = [.width, .minYMargin]
@@ -933,21 +934,22 @@ private final class RecordingControlPanel: NSPanel {
 
         let container = NSView(frame: NSRect(x: 0, y: 0, width: w, height: h))
         container.wantsLayer = true
-        container.layer?.backgroundColor = NSColor(white: 0.14, alpha: 0.92).cgColor
-        container.layer?.cornerRadius = 12
-        container.layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
+        container.layer?.backgroundColor = UIStyle.Palette.HUD.panel.cgColor
+        container.layer?.cornerRadius = UIStyle.Metrics.hudRadius
+        container.layer?.cornerCurve = .continuous
+        container.layer?.borderColor = UIStyle.Palette.HUD.panelBorder.cgColor
         container.layer?.borderWidth = 1
         contentView = container
 
-        timeLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
-        timeLabel.textColor = .white
+        timeLabel.font = UIStyle.Text.hudMono(13, weight: .semibold)
+        timeLabel.textColor = UIStyle.Palette.HUD.text
         timeLabel.alignment = .left
         timeLabel.frame = NSRect(x: 14, y: 9, width: 130, height: 18)
         container.addSubview(timeLabel)
 
         let sep = NSView(frame: NSRect(x: 150, y: 6, width: 1, height: 24))
         sep.wantsLayer = true
-        sep.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.14).cgColor
+        sep.layer?.backgroundColor = UIStyle.Palette.HUD.separator.cgColor
         container.addSubview(sep)
 
         func pill(_ title: String, systemImage: String, bg: NSColor, fg: NSColor, action: Selector) -> NSButton {
@@ -956,14 +958,14 @@ private final class RecordingControlPanel: NSPanel {
             b.isBordered = false
             b.wantsLayer = true
             b.layer?.backgroundColor = bg.cgColor
-            b.layer?.cornerRadius = 8
+            b.layer?.cornerRadius = UIStyle.Metrics.hudRadiusS
             if let img = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil) {
                 img.isTemplate = true
                 b.image = img
                 b.imagePosition = .imageLeading
             }
             b.attributedTitle = NSAttributedString(string: title, attributes: [
-                .foregroundColor: fg, .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+                .foregroundColor: fg, .font: UIStyle.Text.hudText(12),
             ])
             b.contentTintColor = fg
             b.setAccessibilityElement(true)
@@ -976,9 +978,9 @@ private final class RecordingControlPanel: NSPanel {
         container.addSubview(stop)
         actionButtons.append(stop)
 
-        let cancel = pill(L10n.tr("取消", "Cancel"), systemImage: "xmark", bg: NSColor.white, fg: NSColor(white: 0.2, alpha: 1), action: #selector(doCancel))
+        let cancel = pill(L10n.tr("取消", "Cancel"), systemImage: "xmark", bg: UIStyle.Palette.HUD.text, fg: NSColor(white: 0.2, alpha: 1), action: #selector(doCancel))
         cancel.frame = NSRect(x: 232, y: 5, width: 60, height: 26)
-        cancel.layer?.borderColor = NSColor.black.withAlphaComponent(0.08).cgColor
+        cancel.layer?.borderColor = UIStyle.Palette.HUD.toolbarBorderOuter.cgColor
         cancel.layer?.borderWidth = 1
         container.addSubview(cancel)
         actionButtons.append(cancel)
@@ -990,7 +992,7 @@ private final class RecordingControlPanel: NSPanel {
         blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.dotOn.toggle()
-            self.timeLabel.textColor = self.dotOn ? .white : .white.withAlphaComponent(0.5)
+            self.timeLabel.textColor = self.dotOn ? UIStyle.Palette.HUD.text : UIStyle.Palette.HUD.text.withAlphaComponent(0.5)
         }
         if let t = blinkTimer { RunLoop.main.add(t, forMode: .common) }
     }
@@ -1032,14 +1034,14 @@ private final class CountdownPanel: NSPanel {
         super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 4)
         isOpaque = false
-        backgroundColor = NSColor.black.withAlphaComponent(0.35)
+        backgroundColor = UIStyle.Palette.HUD.scrim
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         hasShadow = false
         hidesOnDeactivate = false
         sharingType = .none
 
-        label.font = .systemFont(ofSize: 120, weight: .bold)
-        label.textColor = .white
+        label.font = UIStyle.Text.hudText(120, weight: .bold)
+        label.textColor = UIStyle.Palette.HUD.text
         label.alignment = .center
         label.backgroundColor = .clear
         label.isBezeled = false
@@ -1050,8 +1052,8 @@ private final class CountdownPanel: NSPanel {
         contentView?.addSubview(label)
 
         let hint = NSTextField(labelWithString: L10n.tr("即将开始全屏录制  ·  顶部控制条可停止", "Fullscreen recording will start  ·  Use top bar to stop"))
-        hint.font = .systemFont(ofSize: 14, weight: .medium)
-        hint.textColor = .white.withAlphaComponent(0.9)
+        hint.font = UIStyle.Text.hudText(14, weight: .medium)
+        hint.textColor = UIStyle.Palette.HUD.textDim
         hint.alignment = .center
         hint.frame = NSRect(x: frame.width / 2 - 200, y: frame.height / 2 - 100, width: 400, height: 20)
         hint.setAccessibilityElement(true)

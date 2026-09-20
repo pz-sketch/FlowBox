@@ -25,16 +25,10 @@ extension SettingsWindowController {
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
-        scrollView.wantsLayer = true
-        scrollView.layer?.cornerRadius = UIStyle.Metrics.radiusL
-        scrollView.layer?.borderWidth = 1
-        scrollView.layer?.borderColor = UIStyle.Palette.cardBorder.cgColor
-        scrollView.layer?.backgroundColor = UIStyle.Palette.card.cgColor
         scrollView.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(scrollView)
-        UIStyle.fillWidth(scrollView, in: stack)
         NSLayoutConstraint.activate([
             scrollView.heightAnchor.constraint(equalToConstant: 260),
             listStack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
@@ -42,6 +36,10 @@ extension SettingsWindowController {
             listStack.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
             listStack.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
         ])
+        // 列表用卡片包裹：滚动条浮在卡片内缘，边框不再被它压住
+        let listCard = UIStyle.card(scrollView, padding: 0)
+        stack.addArrangedSubview(listCard)
+        UIStyle.fillWidth(listCard, in: stack)
 
         let buttons = UIStyle.hStack(spacing: UIStyle.Metrics.sp10)
         let add = UIStyle.primaryButton(

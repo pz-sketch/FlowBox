@@ -24,13 +24,13 @@ func settingsDebugLog(_ message: String) {
 final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     var window: NSWindow!
-    var menuChecks: [String: NSButton] = [:]
+    var menuChecks: [String: UIStyle.SwitchRow] = [:]
     var listStack: NSStackView!
-    var reverseCheck: NSButton!
-    var smoothCheck: NSButton!
+    var reverseCheck: UIStyle.SwitchRow!
+    var smoothCheck: UIStyle.SwitchRow!
     var stepSlider: NSSlider!
     var stepField: NSTextField!
-    var hiderCheck: NSButton!
+    var hiderCheck: UIStyle.SwitchRow!
     var shotRecorder: HotKeyRecorder!
     var shotHotKeyHint: NSTextField!
     var penWell: NSColorWell!
@@ -40,16 +40,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var mosaicValueLabel: NSTextField!
     var recRecorder: HotKeyRecorder!
     var recHotKeyHint: NSTextField!
-    var recSystemAudioCheck: NSButton!
-    var recMicCheck: NSButton!
-    var recCameraCheck: NSButton!
-    var recCameraCircleCheck: NSButton!
-    var recCameraMirrorCheck: NSButton!
+    var recSystemAudioCheck: UIStyle.SwitchRow!
+    var recMicCheck: UIStyle.SwitchRow!
+    var recCameraCheck: UIStyle.SwitchRow!
+    var recCameraCircleCheck: UIStyle.SwitchRow!
+    var recCameraMirrorCheck: UIStyle.SwitchRow!
     var recCameraWidthSlider: NSSlider!
     var recCameraWidthLabel: NSTextField!
 
     // 人脸看守
-    var presenceCheck: NSButton!
+    var presenceCheck: UIStyle.SwitchRow!
     var presenceStatusHint: NSTextField!
     var presenceLockStepper: NSStepper!
     var presenceLockValueLabel: NSTextField!
@@ -57,8 +57,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var presenceConfirmValueLabel: NSTextField!
     var presenceGraceStepper: NSStepper!
     var presenceGraceValueLabel: NSTextField!
-    var presenceSaveCheck: NSButton!
-    var presenceStrangerCheck: NSButton!
+    var presenceSaveCheck: UIStyle.SwitchRow!
+    var presenceStrangerCheck: UIStyle.SwitchRow!
     var presenceEnrollButton: NSButton!
     var presenceOwnerStatusLabel: NSTextField!
 
@@ -150,7 +150,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let titleStack = UIStyle.vStack(spacing: 1)
         titleStack.addArrangedSubview(UIStyle.label("FlowBox", font: UIStyle.Text.display(), color: UIStyle.Palette.text))
         titleStack.addArrangedSubview(UIStyle.label(
-            L10n.tr("轻量 · 高效 · 不打扰  —  Finder 增强 / 截图 / 录屏 / 去隔离", "Lightweight · Efficient · Unobtrusive — Finder / Screenshot / Recording / Quarantine"),
+            L10n.tr("轻量 · 高效 · 不打扰", "Lightweight · Efficient · Unobtrusive"),
             font: UIStyle.Text.micro(), color: UIStyle.Palette.textSecondary))
         header.addArrangedSubview(titleStack)
         header.addArrangedSubview(UIStyle.spacer())
@@ -226,20 +226,21 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             L10n.tr("权限", "Permissions") + " · " + name,
             font: UIStyle.Text.body(.semibold), color: UIStyle.Palette.text))
 
-        inner.addArrangedSubview(UIStyle.hint(purpose, color: UIStyle.Palette.textSecondary, lines: 2))
+        inner.addArrangedSubview(UIStyle.hint(purpose))
 
         let row = UIStyle.hStack(spacing: UIStyle.Metrics.sp10)
+        let status = granted ? L10n.tr("已授权", "Granted") : L10n.tr("需要授权", "Authorization required")
         let pill = UIStyle.statusPill(
-            granted ? L10n.tr("已授权", "Granted") : L10n.tr("需要授权", "Authorization required"),
+            status,
             color: granted ? UIStyle.Palette.success : UIStyle.Palette.warning,
             background: granted ? UIStyle.Palette.successSoft : UIStyle.Palette.warningSoft)
         pill.setAccessibilityElement(true)
         pill.setAccessibilityLabel(L10n.tr("权限状态", "Permission status"))
-        pill.setAccessibilityValue(granted ? L10n.tr("已授权", "Granted") : L10n.tr("需要授权", "Authorization required"))
+        pill.setAccessibilityValue(status)
         row.addArrangedSubview(pill)
         row.addArrangedSubview(UIStyle.spacer())
 
-        let button = UIStyle.secondaryButton(L10n.tr("打开系统设置", "Open System Settings"), target: self, action: #selector(openPermissionSettings(_:)))
+        let button = UIStyle.secondaryButton(L10n.tr("打开「" + shortName(name) + "」设置", "Open " + shortName(name) + " settings"), target: self, action: #selector(openPermissionSettings(_:)))
         button.identifier = NSUserInterfaceItemIdentifier(settingsKey)
         button.setAccessibilityLabel(L10n.tr("打开系统设置中的" + name, "Open " + name + " in System Settings"))
         button.setAccessibilityHelp(purpose)
@@ -247,6 +248,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         inner.addArrangedSubview(row)
         UIStyle.fillWidth(row, in: inner)
         return cardBox(containing: inner)
+    }
+
+    /// 权限名在卡片标题里带了中英对照（如「屏幕录制 / Screen Recording」），按钮上只用中文短名
+    private func shortName(_ name: String) -> String {
+        let head = name.components(separatedBy: "/").first ?? name
+        return head.trimmingCharacters(in: .whitespaces)
     }
 
     @objc func openPermissionSettings(_ sender: NSButton) {
@@ -261,7 +268,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Compact multi-permission card for recording-related media access.
+    /// 录屏相关的多项权限：一行一个权限（名称 + 状态 + 对应设置入口），
+    /// 避免出现三个都叫「设置」、分不清对应哪个权限的按钮。
     func permissionSummaryCard(_ items: [(name: String, granted: Bool, settingsKey: String)]) -> NSBox {
         let inner = UIStyle.vStack(spacing: UIStyle.Metrics.sp10)
 
@@ -269,32 +277,32 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             L10n.tr("录屏权限", "Recording permissions"),
             font: UIStyle.Text.body(.semibold), color: UIStyle.Palette.text))
 
-        let statusRow = UIStyle.hStack(spacing: UIStyle.Metrics.sp8)
-        statusRow.distribution = .fillEqually
         for item in items {
+            let row = UIStyle.hStack(spacing: UIStyle.Metrics.sp10)
+
+            row.addArrangedSubview(UIStyle.label(item.name, font: UIStyle.Text.body(), color: UIStyle.Palette.text))
+
+            let status = item.granted ? L10n.tr("已授权", "Granted") : L10n.tr("需要授权", "Authorization required")
             let pill = UIStyle.statusPill(
-                (item.granted ? "✓ " : "! ") + item.name,
+                status,
                 color: item.granted ? UIStyle.Palette.success : UIStyle.Palette.warning,
                 background: item.granted ? UIStyle.Palette.successSoft : UIStyle.Palette.warningSoft)
             pill.setAccessibilityElement(true)
             pill.setAccessibilityLabel(item.name)
-            pill.setAccessibilityValue(item.granted
-                ? L10n.tr("已授权", "Granted")
-                : L10n.tr("需要授权", "Authorization required"))
-            statusRow.addArrangedSubview(pill)
-        }
-        inner.addArrangedSubview(statusRow)
-        UIStyle.fillWidth(statusRow, in: inner)
+            pill.setAccessibilityValue(status)
+            row.addArrangedSubview(pill)
 
-        let actionRow = UIStyle.hStack(spacing: UIStyle.Metrics.sp8)
-        for item in items {
+            row.addArrangedSubview(UIStyle.spacer())
+
             let button = UIStyle.secondaryButton(L10n.tr("设置", "Settings"), target: self, action: #selector(openPermissionSettings(_:)))
             button.identifier = NSUserInterfaceItemIdentifier(item.settingsKey)
             button.setAccessibilityLabel(L10n.tr("打开" + item.name + "系统设置", "Open " + item.name + " settings"))
             button.setAccessibilityHelp(L10n.tr("在系统设置中管理此权限。", "Manage this permission in System Settings."))
-            actionRow.addArrangedSubview(button)
+            row.addArrangedSubview(button)
+
+            inner.addArrangedSubview(row)
+            UIStyle.fillWidth(row, in: inner)
         }
-        inner.addArrangedSubview(actionRow)
         return cardBox(containing: inner)
     }
 
@@ -330,7 +338,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         UIStyle.sectionHeader(title: title, subtitle: subtitle, symbol: symbol)
     }
 
-    /// 一行模板:[✓ 名称] [文件名] [↑] [↓] [编辑] [删除]
+    /// 一行模板:[✓ 名称] [文件名] …… [↑] [↓] [编辑] [删除]
+    /// 操作按钮靠右对齐，行与行之间按钮位置固定，不会随文件名长度左右游移
     func makeTemplateRow(index: Int, item: NewFileItem) -> NSView {
         let row = UIStyle.hStack(spacing: UIStyle.Metrics.sp8)
         row.edgeInsets = NSEdgeInsets(top: UIStyle.Metrics.sp4, left: UIStyle.Metrics.sp6, bottom: UIStyle.Metrics.sp4, right: UIStyle.Metrics.sp6)
@@ -341,6 +350,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         row.addArrangedSubview(check)
 
         row.addArrangedSubview(UIStyle.pill(item.displayFilename))
+        row.addArrangedSubview(UIStyle.spacer())
 
         let up = smallButton(symbol: "chevron.up", action: #selector(moveTemplateUp(_:)), tag: index)
         let upLabel = L10n.tr("上移模板", "Move template up")
@@ -393,20 +403,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         } else {
             reverseCheck.state = config.scroll.reverseMouseWheel ? .on : .off
         }
-        // 状态旁加提示(已授权/未授权)
-        if let hint = reverseCheck.superview?.subviews.compactMap({ $0 as? NSTextField }).last {
-            let s = PermissionManager.accessibilityStatusText()
-            hint.stringValue = s.ok ? L10n.tr("触控板不受影响", "Trackpad unaffected") + " · \(s.text)" : L10n.tr("触控板不受影响;首次开启需要在系统设置里授权「辅助功能」", "Trackpad unaffected; grant Accessibility on first enable") + " · \(s.text)"
-            hint.textColor = s.ok ? NSColor.systemGreen : NSColor.secondaryLabelColor
-        }
         smoothCheck.state = config.scroll.smoothScrolling ? .on : .off
         hiderCheck.state = config.menuBar.hiderEnabled ? .on : .off
-        // 屏幕录制状态
-        if let hint = hiderCheck.superview?.subviews.compactMap({ $0 as? NSTextField }).last {
-            let s = PermissionManager.screenCaptureStatusText()
-            hint.stringValue = s.ok ? L10n.tr("已授权「屏幕录制」", "Screen Recording granted") + " · \(s.text)" : L10n.tr("开启后菜单栏最右多出箭头「«」:顶部图标被刘海/空间挤掉时,点箭头查看并打开它们;首次需授权「屏幕录制」", "Adds « at far right for notch overflow; requires Screen Recording") + " · \(s.text)"
-            hint.textColor = s.ok ? NSColor.systemGreen : NSColor.secondaryLabelColor
-        }
         updateSmoothControlsEnabled()
     }
 
@@ -423,7 +421,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             let row = makeTemplateRow(index: index, item: item)
             row.translatesAutoresizingMaskIntoConstraints = false
             listStack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: listStack.widthAnchor, constant: -16).isActive = true
             row.heightAnchor.constraint(greaterThanOrEqualToConstant: 24).isActive = true
             if index < config.newFiles.count - 1 {
                 let sep = UIStyle.hairline()
@@ -444,7 +441,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     // MARK: - 动作
 
-    @objc func toggleMenu(_ sender: NSButton) {
+    @objc func toggleMenu(_ sender: UIStyle.SwitchRow) {
         settingsDebugLog("toggleMenu key=\(sender.identifier?.rawValue ?? "?") state=\(sender.state.rawValue)")
         guard let key = sender.identifier?.rawValue else { return }
         let on = sender.state == .on
@@ -458,6 +455,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         save()
     }
 
+    /// 模板行仍是勾选框（列表里一行一个项，用开关会显得笨重），所以这里保持 NSButton
     @objc func toggleTemplate(_ sender: NSButton) {
         settingsDebugLog("toggleTemplate index=\(sender.tag) state=\(sender.state.rawValue)")
         let index = sender.tag
@@ -489,7 +487,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         reloadTemplates()
     }
 
-    @objc func toggleReverse(_ sender: NSButton) {
+    @objc func toggleReverse(_ sender: UIStyle.SwitchRow) {
         settingsDebugLog("toggleReverse state=\(sender.state.rawValue)")
         if sender.state == .off {
             config.scroll.reverseMouseWheel = false
@@ -604,7 +602,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         reverseCheck.state = ScrollReverser.shared.isRunning && config.scroll.reverseMouseWheel ? .on : .off
     }
 
-    @objc func toggleSmooth(_ sender: NSButton) {
+    @objc func toggleSmooth(_ sender: UIStyle.SwitchRow) {
         settingsDebugLog("toggleSmooth state=\(sender.state.rawValue)")
         let on = sender.state == .on
         if on, !PermissionManager.isEffectivelyTrusted {
@@ -645,7 +643,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     // MARK: - 菜单栏收纳
 
-    @objc func toggleHider(_ sender: NSButton) {
+    @objc func toggleHider(_ sender: UIStyle.SwitchRow) {
         let on = sender.state == .on
         settingsDebugLog("toggleHider state=\(sender.state.rawValue)")
         config.menuBar.hiderEnabled = on
@@ -858,15 +856,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         recHotKeyHint.stringValue = ok ? "" : L10n.tr("注册失败,可能被其它应用占用", "Registration failed — may be in use")
     }
 
-    @objc func toggleRecSystemAudio(_ sender: NSButton) {
+    @objc func toggleRecSystemAudio(_ sender: UIStyle.SwitchRow) {
         config.recording.captureSystemAudio = sender.state == .on
         save()
     }
-    @objc func toggleRecMic(_ sender: NSButton) {
+    @objc func toggleRecMic(_ sender: UIStyle.SwitchRow) {
         config.recording.captureMicrophone = sender.state == .on
         save()
     }
-    @objc func toggleRecCamera(_ sender: NSButton) {
+    @objc func toggleRecCamera(_ sender: UIStyle.SwitchRow) {
         let on = sender.state == .on
         if on {
             switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -908,11 +906,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         save()
         updateCameraControlsEnabled()
     }
-    @objc func toggleCameraCircle(_ sender: NSButton) {
+    @objc func toggleCameraCircle(_ sender: UIStyle.SwitchRow) {
         config.recording.cameraIsCircle = sender.state == .on
         save()
     }
-    @objc func toggleCameraMirror(_ sender: NSButton) {
+    @objc func toggleCameraMirror(_ sender: UIStyle.SwitchRow) {
         config.recording.cameraMirrored = sender.state == .on
         save()
     }

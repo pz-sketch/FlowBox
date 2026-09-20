@@ -20,14 +20,22 @@ extension SettingsWindowController {
             ("openTerminal", L10n.tr("在终端中打开", "Open in Terminal")),
             ("newFile", L10n.tr("新建文件", "New File")),
         ]
-        let checksStack = UIStyle.vStack(spacing: UIStyle.Metrics.sp10)
-        for (key, title) in menuItems {
-            let check = UIStyle.checkbox(title, target: self, action: #selector(toggleMenu(_:)))
+        let checksStack = UIStyle.vStack(spacing: UIStyle.Metrics.sp2)
+        for (index, item) in menuItems.enumerated() {
+            let (key, title) = item
+            let check = UIStyle.switchRow(title, target: self, action: #selector(toggleMenu(_:)))
             check.setAccessibilityLabel(title)
             check.setAccessibilityHelp(L10n.tr("控制 Finder 右键菜单中的此项目。", "Show or hide this item in the Finder context menu."))
             check.identifier = NSUserInterfaceItemIdentifier(key)
             menuChecks[key] = check
             checksStack.addArrangedSubview(check)
+            UIStyle.fillWidth(check, in: checksStack)
+            // 行间细线：把多行开关读成一个分组，而不是散落的勾选项
+            if index < menuItems.count - 1 {
+                let sep = UIStyle.hairline()
+                checksStack.addArrangedSubview(sep)
+                UIStyle.fillWidth(sep, in: checksStack)
+            }
         }
         let menuCard = cardBox(containing: checksStack)
         stack.addArrangedSubview(menuCard)
@@ -49,15 +57,14 @@ extension SettingsWindowController {
         UIStyle.fillWidth(hiderPermissionCard, in: stack)
 
         let hiderInner = UIStyle.vStack(spacing: UIStyle.Metrics.sp8)
-        hiderCheck = UIStyle.checkbox(
+        hiderCheck = UIStyle.switchRow(
             L10n.tr("收纳菜单栏图标", "Collapse menu bar icons"),
             target: self, action: #selector(toggleHider)
         )
         hiderCheck.setAccessibilityHelp(L10n.tr("将溢出的菜单栏图标收纳到箭头菜单。", "Place overflow menu bar icons in the arrow menu."))
         hiderInner.addArrangedSubview(hiderCheck)
         hiderInner.addArrangedSubview(UIStyle.hint(
-            L10n.tr("开启后菜单栏最右多出箭头「«」:顶部图标被刘海/空间挤掉时,点箭头查看并打开它们;首次需授权「屏幕录制」", "Adds « at the far right; when icons overflow the notch, click « to reveal them. Requires Screen Recording"),
-            maxWidth: 460, lines: 2
+            L10n.tr("开启后菜单栏最右多出箭头「«」:顶部图标被刘海/空间挤掉时,点箭头查看并打开它们;首次需授权「屏幕录制」", "Adds « at the far right; when icons overflow the notch, click « to reveal them. Requires Screen Recording")
         ))
         let hiderCard = cardBox(containing: hiderInner)
         stack.addArrangedSubview(hiderCard)

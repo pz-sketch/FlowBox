@@ -40,18 +40,30 @@ enum UIStyle {
         static let smallControlHeight: CGFloat = 24
         static let iconButtonSize: CGFloat = 26
         static let chipSize: CGFloat = 28
+        /// 滑杆与数值输入框（设置页所有参数行共用同一宽度，避免各行参差）
+        static let sliderWidth: CGFloat = 150
+        static let numberFieldWidth: CGFloat = 64
+        /// 参数行左侧标签列宽度（步进器/滑杆因此能纵向对齐）
+        static let labelColumnWidth: CGFloat = 210
 
         /// 设置窗口
         static let windowWidth: CGFloat = 680
-        static let windowHeight: CGFloat = 580
+        /// 默认高度取「让大多数 Tab 免滚动」的值：内容更长的 Tab 在窗口内滚动，窗口本身不再随 Tab 变形
+        static let windowHeight: CGFloat = 660
         static let minimumWindowWidth: CGFloat = 520
         static let minimumWindowHeight: CGFloat = 420
         /// 设置窗口内容区左右内边距，也是窗口顶部留白（透明标题栏下）
         static let windowPadding: CGFloat = 24
         static let windowTopInset: CGFloat = 18
+        /// 透明标题栏窗口里，内容首行需要避开的红黄绿按钮区域高度
+        static let titlebarClearance: CGFloat = 34
 
         /// 卡片内边距
         static let cardPadding: CGFloat = 16
+
+        /// HUD（截图覆盖层 / 录屏悬浮条）：这类浮层压在用户画面上，永远走深色高对比方案
+        static let hudRadius: CGFloat = 10
+        static let hudRadiusS: CGFloat = 6
     }
 
     // MARK: - 2. 色板（跟随系统强调色）
@@ -65,7 +77,7 @@ enum UIStyle {
         /// 三级表面：窗口 → 卡片 → 内嵌
         static var window: NSColor { .windowBackgroundColor }
         static var card: NSColor { .controlBackgroundColor.withAlphaComponent(0.6) }
-        static var cardBorder: NSColor { .separatorColor.withAlphaComponent(0.5) }
+        static var cardBorder: NSColor { .separatorColor.withAlphaComponent(0.65) }
         static var inset: NSColor { .separatorColor.withAlphaComponent(0.07) }
         static var control: NSColor { .controlBackgroundColor.withAlphaComponent(0.92) }
         static var controlBorder: NSColor { .separatorColor.withAlphaComponent(0.45) }
@@ -88,6 +100,47 @@ enum UIStyle {
         /// 中性强调（用于去隔离等非主功能）
         static var neutralTint: NSColor { .systemOrange }
         static var neutralSoft: NSColor { .systemOrange.withAlphaComponent(0.14) }
+
+        /// HUD 色板：压在用户屏幕画面上，不跟随系统深浅色，固定高对比取值
+        enum HUD {
+            /// 悬浮条/底板
+            static let panel = NSColor(white: 0.14, alpha: 0.92)
+            static let panelBorder = NSColor.white.withAlphaComponent(0.12)
+            static let separator = NSColor.white.withAlphaComponent(0.14)
+
+            /// 压暗整屏（截图选区之外、倒计时遮罩）
+            static let scrim = NSColor.black.withAlphaComponent(0.35)
+            static let scrimStrong = NSColor.black.withAlphaComponent(0.72)
+            /// 自动消失的结果提示条
+            static let toastFill = NSColor.black.withAlphaComponent(0.76)
+
+            /// 亮色工具条（截图标注重叠层）
+            static let toolbarFill = NSColor.white.withAlphaComponent(0.94)
+            static let toolbarBorderOuter = NSColor.black.withAlphaComponent(0.10)
+            static let toolbarBorderInner = NSColor.white.withAlphaComponent(0.65)
+            static let groupFill = NSColor.black.withAlphaComponent(0.06)
+            static let groupBorder = NSColor.black.withAlphaComponent(0.07)
+            static let groupDivider = NSColor.black.withAlphaComponent(0.10)
+            static let confirmFill = NSColor.systemGreen.withAlphaComponent(0.95)
+            static let iconActive = NSColor.controlAccentColor
+            static let iconActiveFill = NSColor.controlAccentColor.withAlphaComponent(0.15)
+            static let iconActiveBorder = NSColor.controlAccentColor.withAlphaComponent(0.22)
+            static let labelFill = NSColor.black.withAlphaComponent(0.6)
+            static let hintFill = NSColor.black.withAlphaComponent(0.55)
+
+            /// 文字
+            static let text = NSColor.white
+            static let textDim = NSColor.white.withAlphaComponent(0.9)
+            static let textOnLight = NSColor.black.withAlphaComponent(0.88)
+            static let textOnLightDim = NSColor.black.withAlphaComponent(0.32)
+
+            /// 选区与手柄
+            static let selectionStroke = NSColor.white
+            static let selectionHandleShadow = NSColor.black.withAlphaComponent(0.45)
+
+            /// 阴影
+            static let shadow = NSColor.black.withAlphaComponent(0.22)
+        }
     }
 
     // MARK: - 3. 排版标度
@@ -117,9 +170,77 @@ enum UIStyle {
         static func monoDigit(_ size: CGFloat = 11, weight: NSFont.Weight = .regular) -> NSFont {
             .monospacedDigitSystemFont(ofSize: size, weight: weight)
         }
+        /// HUD 文本（截图覆盖层、录屏悬浮条）
+        static func hudText(_ size: CGFloat = 12, weight: NSFont.Weight = .semibold) -> NSFont {
+            .systemFont(ofSize: size, weight: weight)
+        }
+        /// HUD 数字/时间
+        static func hudMono(_ size: CGFloat = 11, weight: NSFont.Weight = .medium) -> NSFont {
+            .monospacedDigitSystemFont(ofSize: size, weight: weight)
+        }
     }
 
     // MARK: - 4. 底层工具
+
+    /// 图层着色的通用实现
+    ///
+    /// `layer?.backgroundColor = color.cgColor` 会在赋值那一刻把动态色**解析死**，
+    /// 之后切换深/浅色外观时图层仍是旧颜色（典型症状：深色下浅底白字看不清）。
+    /// 因此所有用 layer 上色的视图都走这两个子类，在外观变化时重新解析动态色。
+    class LayerBackedView: NSView {
+        var fill: NSColor? { didSet { syncLayer() } }
+        var stroke: NSColor? { didSet { syncLayer() } }
+        var radius: CGFloat = 0 { didSet { syncLayer() } }
+        var strokeWidth: CGFloat = 0 { didSet { syncLayer() } }
+        /// 连续圆角（胶囊/卡片观感更顺）
+        var continuousCorner: Bool = true
+
+        override func viewDidChangeEffectiveAppearance() {
+            super.viewDidChangeEffectiveAppearance()
+            syncLayer()
+        }
+
+        /// 子类布局变化后调用（如自绘尺寸依赖 bounds）
+        func syncLayer() {
+            guard let layer else {
+                wantsLayer = true
+                syncLayer()
+                return
+            }
+            layer.cornerRadius = radius
+            if continuousCorner { layer.cornerCurve = .continuous }
+            layer.borderWidth = strokeWidth
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                layer.backgroundColor = fill?.cgColor
+                layer.borderColor = stroke?.cgColor
+            }
+        }
+    }
+
+    /// 同上，用于按钮（主按钮/图标按钮的填充与描边）
+    class LayerBackedButton: NSButton {
+        var fill: NSColor? { didSet { syncLayer() } }
+        var stroke: NSColor? { didSet { syncLayer() } }
+        var radius: CGFloat = 0 { didSet { syncLayer() } }
+        var strokeWidth: CGFloat = 0 { didSet { syncLayer() } }
+
+        override func viewDidChangeEffectiveAppearance() {
+            super.viewDidChangeEffectiveAppearance()
+            syncLayer()
+        }
+
+        func syncLayer() {
+            wantsLayer = true
+            guard let layer else { return }
+            layer.cornerRadius = radius
+            layer.cornerCurve = .continuous
+            layer.borderWidth = strokeWidth
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                layer.backgroundColor = fill?.cgColor
+                layer.borderColor = stroke?.cgColor
+            }
+        }
+    }
 
     /// 垂直栈（默认左对齐）
     static func vStack(spacing: CGFloat = Metrics.sp12, alignment: NSLayoutConstraint.Attribute = .leading) -> NSStackView {
@@ -163,27 +284,68 @@ enum UIStyle {
         return l
     }
 
-    /// 多行说明文字（自动换行 + 行数上限）
+    /// 多行说明文字：宽度跟随容器（调用方配 `fillWidth`），不限行数以免截断文案
     static func hint(
         _ text: String,
         color: NSColor = Palette.textSecondary,
-        maxWidth: CGFloat = 480,
-        lines: Int = 2,
         font: NSFont = Text.caption()
     ) -> NSTextField {
         let l = label(text, font: font, color: color)
         l.lineBreakMode = .byWordWrapping
-        l.maximumNumberOfLines = lines
-        l.preferredMaxLayoutWidth = maxWidth
+        l.maximumNumberOfLines = 0
+        l.cell?.wraps = true
+        l.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return l
+    }
+
+    /// 参数行标签（滑杆 / 步进器 / 颜色选择器左侧）
+    static func controlLabel(_ text: String, width: CGFloat? = nil) -> NSTextField {
+        let l = label(text, font: Text.body(.medium), color: Palette.text)
+        if let width {
+            l.widthAnchor.constraint(equalToConstant: width).isActive = true
+        }
+        return l
+    }
+
+    /// 参数滑杆：统一小尺寸与宽度，避免各行宽窄不一
+    static func slider(
+        value: Double,
+        min: Double,
+        max: Double,
+        target: AnyObject?,
+        action: Selector,
+        width: CGFloat = Metrics.sliderWidth
+    ) -> NSSlider {
+        let s = NSSlider(value: value, minValue: min, maxValue: max, target: target, action: action)
+        s.controlSize = .small
+        s.translatesAutoresizingMaskIntoConstraints = false
+        s.widthAnchor.constraint(equalToConstant: width).isActive = true
+        return s
+    }
+
+    /// 参数数值输入框
+    static func numberField(
+        _ value: Double,
+        target: AnyObject?,
+        action: Selector,
+        width: CGFloat = Metrics.numberFieldWidth
+    ) -> NSTextField {
+        let f = NSTextField(string: String(format: "%.0f", value))
+        f.target = target
+        f.action = action
+        f.alignment = .right
+        f.font = Text.monoDigit(12)
+        f.translatesAutoresizingMaskIntoConstraints = false
+        f.widthAnchor.constraint(equalToConstant: width).isActive = true
+        return f
     }
 
     /// 1px 分隔线（浅）
     static func hairline(_ color: NSColor = Palette.hairline) -> NSView {
-        let v = NSView()
+        let v = LayerBackedView()
+        v.continuousCorner = false
         v.translatesAutoresizingMaskIntoConstraints = false
-        v.wantsLayer = true
-        v.layer?.backgroundColor = color.cgColor
+        v.fill = color
         v.heightAnchor.constraint(equalToConstant: 1).isActive = true
         return v
     }
@@ -196,10 +358,9 @@ enum UIStyle {
         background: NSColor? = nil,
         pointSize: CGFloat = 14
     ) -> NSView {
-        let box = NSView()
-        box.wantsLayer = true
-        box.layer?.backgroundColor = (background ?? tint.withAlphaComponent(0.10)).cgColor
-        box.layer?.cornerRadius = Metrics.radiusM
+        let box = LayerBackedView()
+        box.fill = background ?? tint.withAlphaComponent(0.10)
+        box.radius = Metrics.radiusM
         box.translatesAutoresizingMaskIntoConstraints = false
         box.widthAnchor.constraint(equalToConstant: size).isActive = true
         box.heightAnchor.constraint(equalToConstant: size).isActive = true
@@ -230,26 +391,8 @@ enum UIStyle {
         box.fillColor = Palette.card
         box.titlePosition = .noTitle
         box.wantsLayer = true
-        box.layer?.shadowColor = NSColor.black.cgColor
-        box.layer?.shadowOpacity = 0.05
-        box.layer?.shadowRadius = 10
-        box.layer?.shadowOffset = NSSize(width: 0, height: 4)
+        // 分组卡片不做投影：系统设置用的就是「浅底 + 细描边」，投影会让一排卡片显得零散
         box.layer?.masksToBounds = false
-    }
-
-    /// 卡片外观（作用于任意 NSView）
-    static func applySoftCard(_ view: NSView) {
-        view.wantsLayer = true
-        guard let layer = view.layer else { return }
-        layer.cornerRadius = Metrics.radiusL
-        layer.cornerCurve = .continuous
-        layer.borderWidth = 1
-        layer.borderColor = Palette.cardBorder.cgColor
-        layer.backgroundColor = Palette.card.cgColor
-        layer.shadowColor = NSColor.black.cgColor
-        layer.shadowOpacity = 0.05
-        layer.shadowRadius = 10
-        layer.shadowOffset = NSSize(width: 0, height: 4)
     }
 
     /// 把内容包进一张卡片，返回 NSBox
@@ -291,7 +434,7 @@ enum UIStyle {
 
     // MARK: - 6. 控件工厂
 
-    /// 复选框 —— 统一字号与换行
+    /// 复选框 —— 统一字号与换行（仅用于非设置项场景；设置项的开关请用 `switchRow`）
     static func checkbox(_ title: String, target: AnyObject? = nil, action: Selector? = nil) -> NSButton {
         let b = NSButton(checkboxWithTitle: title, target: target, action: action)
         b.font = Text.body()
@@ -299,15 +442,91 @@ enum UIStyle {
         return b
     }
 
+    /// 开关行：开关滑块 + 说明文字（对齐 macOS 系统设置的开关观感）
+    ///
+    /// 目标动作的 sender 是行本身；`state` / `isEnabled` / `identifier` / `tag` 都转发到内部滑块，
+    /// 因此原来按 NSButton 写的开关逻辑只需把类型换成 `SwitchRow`。
+    final class SwitchRow: NSView {
+
+        let toggle = NSSwitch()
+        private let titleLabel: NSTextField
+
+        var target: AnyObject?
+        var action: Selector?
+        // tag / identifier 由 NSView 提供，无需重复声明
+
+        var state: NSControl.StateValue {
+            get { toggle.state }
+            set { toggle.state = newValue }
+        }
+
+        /// 关闭时连同文字一起置灰，避免只看滑块状态
+        var isEnabled: Bool = true {
+            didSet {
+                toggle.isEnabled = isEnabled
+                titleLabel.textColor = isEnabled ? Palette.text : Palette.textTertiary
+            }
+        }
+
+        init(title: String, target: AnyObject?, action: Selector?) {
+            self.target = target
+            self.action = action
+            self.titleLabel = UIStyle.label(title, font: Text.body(), color: Palette.text)
+            super.init(frame: .zero)
+            translatesAutoresizingMaskIntoConstraints = false
+
+            toggle.translatesAutoresizingMaskIntoConstraints = false
+            toggle.controlSize = .small
+            toggle.target = self
+            toggle.action = #selector(toggleChanged)
+            toggle.setAccessibilityLabel(title)
+            addSubview(toggle)
+            addSubview(titleLabel)
+
+            titleLabel.lineBreakMode = .byTruncatingTail
+            NSLayoutConstraint.activate([
+                toggle.leadingAnchor.constraint(equalTo: leadingAnchor),
+                toggle.centerYAnchor.constraint(equalTo: centerYAnchor),
+                titleLabel.leadingAnchor.constraint(equalTo: toggle.trailingAnchor, constant: Metrics.sp10),
+                titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
+                titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+                titleLabel.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: Metrics.sp2),
+                titleLabel.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -Metrics.sp2),
+                heightAnchor.constraint(greaterThanOrEqualToConstant: Metrics.smallControlHeight),
+            ])
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("not supported") }
+
+        @objc private func toggleChanged() {
+            guard let action else { return }
+            NSApp.sendAction(action, to: target, from: self)
+        }
+
+        override func setAccessibilityLabel(_ accessibilityLabel: String?) {
+            super.setAccessibilityLabel(accessibilityLabel)
+            toggle.setAccessibilityLabel(accessibilityLabel)
+        }
+    }
+
+    /// 开关行工厂（设置页里「勾选式」选项统一走这里）
+    @discardableResult
+    static func switchRow(_ title: String, target: AnyObject? = nil, action: Selector? = nil) -> SwitchRow {
+        SwitchRow(title: title, target: target, action: action)
+    }
+
     /// 主按钮：强调色填充
     @discardableResult
     static func primaryButton(_ title: String, symbol: String? = nil, target: AnyObject?, action: Selector?) -> NSButton {
-        let b = NSButton(title: title, target: target, action: action)
+        let b = LayerBackedButton()
+        b.title = title
+        b.target = target
+        b.action = action
         b.bezelStyle = .inline
         b.isBordered = false
-        b.wantsLayer = true
-        b.layer?.cornerRadius = Metrics.radiusM
-        b.layer?.backgroundColor = Palette.accent.cgColor
+        b.fill = Palette.accent
+        b.radius = Metrics.radiusM
         b.contentTintColor = .white
         b.attributedTitle = NSAttributedString(string: title, attributes: [
             .font: Text.body(.medium),
@@ -343,7 +562,7 @@ enum UIStyle {
     /// 图标按钮：正方形浅底 + 圆角
     @discardableResult
     static func iconButton(symbol: String, target: AnyObject?, action: Selector?, size: CGFloat = Metrics.iconButtonSize) -> NSButton {
-        let b = NSButton()
+        let b = LayerBackedButton()
         if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) {
             img.isTemplate = true
             b.image = img
@@ -353,11 +572,10 @@ enum UIStyle {
         }
         b.bezelStyle = .inline
         b.isBordered = false
-        b.wantsLayer = true
-        b.layer?.cornerRadius = Metrics.radiusS
-        b.layer?.backgroundColor = Palette.control.cgColor
-        b.layer?.borderWidth = 1
-        b.layer?.borderColor = Palette.controlBorder.cgColor
+        b.fill = Palette.control
+        b.stroke = Palette.controlBorder
+        b.strokeWidth = 1
+        b.radius = Metrics.radiusS
         b.contentTintColor = Palette.textSecondary
         b.controlSize = .small
         b.target = target
@@ -369,22 +587,15 @@ enum UIStyle {
     }
 
     /// 徽标（版本号等）
-    static func badge(_ text: String, tint: NSColor = Palette.textTertiary) -> NSTextField {
-        let l = label(text, font: Text.mono(10), color: tint)
-        l.alignment = .center
-        l.wantsLayer = true
-        l.drawsBackground = false
-        l.layer?.backgroundColor = Palette.inset.cgColor
-        l.layer?.cornerRadius = Metrics.radiusS
-        return l
+    static func badge(_ text: String, tint: NSColor = Palette.textTertiary) -> NSView {
+        pill(text, font: Text.mono(10), color: tint)
     }
 
     /// 胶囊标签（等宽小字，用于文件名/路径）
     static func pill(_ text: String, font: NSFont = Text.mono(10.5), color: NSColor = Palette.textSecondary) -> NSView {
-        let container = NSView()
-        container.wantsLayer = true
-        container.layer?.backgroundColor = Palette.inset.cgColor
-        container.layer?.cornerRadius = Metrics.radiusS
+        let container = LayerBackedView()
+        container.fill = Palette.inset
+        container.radius = Metrics.radiusS
         container.translatesAutoresizingMaskIntoConstraints = false
         let l = label(text, font: font, color: color)
         l.lineBreakMode = .byTruncatingMiddle
@@ -402,10 +613,9 @@ enum UIStyle {
 
     /// 状态点（绿/黄/红）
     static func statusDot(_ color: NSColor, size: CGFloat = 6) -> NSView {
-        let v = NSView()
-        v.wantsLayer = true
-        v.layer?.backgroundColor = color.cgColor
-        v.layer?.cornerRadius = size / 2
+        let v = LayerBackedView()
+        v.fill = color
+        v.radius = size / 2
         v.translatesAutoresizingMaskIntoConstraints = false
         v.widthAnchor.constraint(equalToConstant: size).isActive = true
         v.heightAnchor.constraint(equalToConstant: size).isActive = true
@@ -414,10 +624,9 @@ enum UIStyle {
 
     /// 状态药丸：软底 + 状态色文字
     static func statusPill(_ text: String, color: NSColor, background: NSColor) -> NSView {
-        let container = NSView()
-        container.wantsLayer = true
-        container.layer?.backgroundColor = background.cgColor
-        container.layer?.cornerRadius = Metrics.radiusS
+        let container = LayerBackedView()
+        container.fill = background
+        container.radius = Metrics.radiusS
         container.translatesAutoresizingMaskIntoConstraints = false
         let l = label(text, font: Text.caption(.medium), color: color)
         container.addSubview(l)
@@ -470,7 +679,15 @@ enum UIStyle {
 
     // MARK: - 8. Tab 脚手架
 
-    /// 创建一个设置 Tab：标准内边距的垂直栈，调用方往里塞内容即可
+    /// 滚动容器的文档视图：需要顶左原点，否则内容从底部开始堆
+    final class FlippedView: NSView {
+        override var isFlipped: Bool { true }
+    }
+
+    /// 创建一个设置 Tab：内容放进滚动容器
+    ///
+    /// 每个 Tab 的内容长度不同（人脸/录屏远长于菜单），若让内容直接决定高度，
+    /// 切换 Tab 时窗口会跟着忽高忽低。这里统一在固定高度内滚动。
     @discardableResult
     static func makeTab(
         _ tabView: NSTabView,
@@ -480,16 +697,42 @@ enum UIStyle {
     ) -> NSStackView {
         let item = NSTabViewItem(identifier: identifier)
         item.label = label
-        let view = NSView()
+
+        let page = NSView()
+        let document = FlippedView()
+        document.translatesAutoresizingMaskIntoConstraints = false
         let stack = vStack(spacing: spacing)
-        view.addSubview(stack)
+        document.addSubview(stack)
+
+        let scroll = NSScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.documentView = document
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+        scroll.verticalScrollElasticity = .allowed
+        page.addSubview(scroll)
+
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Metrics.sp20),
-            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -Metrics.sp20),
-            stack.topAnchor.constraint(equalTo: view.topAnchor, constant: Metrics.windowTopInset),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -Metrics.sp8),
+            scroll.leadingAnchor.constraint(equalTo: page.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: page.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: page.topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: page.bottomAnchor),
+
+            document.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            document.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
+            document.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+
+            stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: Metrics.sp20),
+            stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -Metrics.sp20),
+            stack.topAnchor.constraint(equalTo: document.topAnchor, constant: Metrics.windowTopInset),
+            stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -Metrics.sp16),
         ])
-        item.view = view
+        item.view = page
         tabView.addTabViewItem(item)
         return stack
     }

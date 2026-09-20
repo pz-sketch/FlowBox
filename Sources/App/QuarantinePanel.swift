@@ -12,6 +12,7 @@ final class QuarantinePanel: NSObject {
     private var paths: [String] = []
     private var statusLabel: NSTextField!
     private var stripButton: NSButton!
+    private var emptyLabel: NSTextField!
 
     func show() {
         if window == nil { build() }
@@ -24,38 +25,41 @@ final class QuarantinePanel: NSObject {
 
     private func build() {
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 580, height: 440),
+            contentRect: NSRect(x: 0, y: 0, width: 580, height: 470),
             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        win.title = "去除隔离"
-        UIStyle.applyWindowChrome(win, subtitle: "拖入后一键清理")
+        win.title = L10n.tr("去除隔离", "De-Quarantine")
+        UIStyle.applyWindowChrome(win, subtitle: L10n.tr("拖入后一键清理", "Drop to clean"))
         win.center()
         window = win
 
         guard let content = win.contentView else { return }
         UIStyle.attachHUDMaterial(to: content)
 
-        let root = UIStyle.vStack(spacing: UIStyle.Metrics.sp16)
+        // 首行要避开标题栏上的红黄绿按钮，否则头部图标会和它们叠在一起
+        let root = UIStyle.vStack(spacing: UIStyle.Metrics.sp14)
         content.addSubview(root)
         NSLayoutConstraint.activate([
             root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: UIStyle.Metrics.windowPadding),
             root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -UIStyle.Metrics.windowPadding),
-            root.topAnchor.constraint(equalTo: content.topAnchor, constant: UIStyle.Metrics.windowPadding),
-            root.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -UIStyle.Metrics.sp14),
+            root.topAnchor.constraint(equalTo: content.topAnchor, constant: UIStyle.Metrics.titlebarClearance),
+            root.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -UIStyle.Metrics.sp16),
         ])
 
         let headerRow = UIStyle.sectionHeader(
-            title: "去除隔离",
-            subtitle: "拖入文件后一键清理隔离属性，可直接打开",
+            title: L10n.tr("去除隔离", "De-Quarantine"),
+            subtitle: L10n.tr("拖入文件后一键清理隔离属性，可直接打开", "Drop files to strip the quarantine attribute and open them directly"),
             symbol: "shield.lefthalf.filled",
             tint: UIStyle.Palette.neutralTint
         )
         root.addArrangedSubview(headerRow)
         UIStyle.fillWidth(headerRow, in: root)
 
-        let hint = UIStyle.hint("把 .app / .dmg / .pkg 等拖到下方区域，轻点“去除隔离”即执行 xattr -dr", maxWidth: 520, lines: 2)
+        let hint = UIStyle.hint(L10n.tr(
+            "把 .app / .dmg / .pkg 等拖到下方区域，点「去除隔离」即执行 xattr -dr",
+            "Drop .app / .dmg / .pkg below, then click De-Quarantine to run xattr -dr"))
         root.addArrangedSubview(hint)
         UIStyle.fillWidth(hint, in: root)
 
@@ -70,48 +74,77 @@ final class QuarantinePanel: NSObject {
 
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
         scroll.borderType = .noBorder
-        scroll.wantsLayer = true
-        scroll.layer?.cornerRadius = UIStyle.Metrics.radiusL
-        scroll.layer?.borderWidth = 1
-        scroll.layer?.borderColor = UIStyle.Palette.cardBorder.cgColor
+        scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        root.addArrangedSubview(scroll)
-        scroll.heightAnchor.constraint(equalToConstant: 160).isActive = true
-        UIStyle.fillWidth(scroll, in: root)
 
         table = NSTableView()
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("path"))
-        col.title = "待去隔离的路径"
+        col.title = L10n.tr("待去隔离的路径", "Pending paths")
         col.width = 480
         table.addTableColumn(col)
         table.headerView = nil
         table.delegate = self
         table.dataSource = self
-        table.usesAlternatingRowBackgroundColors = true
+        table.backgroundColor = .clear
+        table.usesAlternatingRowBackgroundColors = false
+        table.style = .plain
         scroll.documentView = table
         // 允许拖入到 table 本身
         table.registerForDraggedTypes([.fileURL])
 
+        // 空列表时给一句占位说明，避免一片空白让人以为表格坏了
+        // 占位文案挂在外层容器上：直接加到 NSScrollView 会被它自己的布局挪位
+        let listWrapper = NSView()
+        listWrapper.translatesAutoresizingMaskIntoConstraints = false
+        listWrapper.addSubview(scroll)
+        NSLayoutConstraint.activate([
+            scroll.leadingAnchor.constraint(equalTo: listWrapper.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: listWrapper.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: listWrapper.topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: listWrapper.bottomAnchor),
+        ])
+
+        emptyLabel = UIStyle.label(
+            L10n.tr("列表为空 — 拖入文件或点「选择文件」", "Nothing here yet — drop files or click Choose Files"),
+            font: UIStyle.Text.body(), color: UIStyle.Palette.textTertiary)
+        listWrapper.addSubview(emptyLabel)
+        NSLayoutConstraint.activate([
+            emptyLabel.centerXAnchor.constraint(equalTo: listWrapper.centerXAnchor),
+            emptyLabel.centerYAnchor.constraint(equalTo: listWrapper.centerYAnchor),
+        ])
+
+        let listCard = UIStyle.card(listWrapper, padding: 0)
+        root.addArrangedSubview(listCard)
+        UIStyle.fillWidth(listCard, in: root)
+        listWrapper.heightAnchor.constraint(equalToConstant: 150).isActive = true
+
         // 底部按钮
         let bar = UIStyle.hStack(spacing: UIStyle.Metrics.sp10)
 
-        bar.addArrangedSubview(UIStyle.secondaryButton("选择文件…", target: self, action: #selector(pickFiles)))
-        bar.addArrangedSubview(UIStyle.secondaryButton("清空", target: self, action: #selector(clear)))
+        bar.addArrangedSubview(UIStyle.secondaryButton(
+            L10n.tr("选择文件…", "Choose Files…"), symbol: "folder",
+            target: self, action: #selector(pickFiles)))
+        bar.addArrangedSubview(UIStyle.secondaryButton(
+            L10n.tr("清空", "Clear"), target: self, action: #selector(clear)))
         bar.addArrangedSubview(UIStyle.spacer())
 
-        statusLabel = UIStyle.label("就绪", font: UIStyle.Text.caption(), color: UIStyle.Palette.textSecondary)
+        statusLabel = UIStyle.label("", font: UIStyle.Text.caption(), color: UIStyle.Palette.textSecondary)
+        statusLabel.alignment = .right
         bar.addArrangedSubview(statusLabel)
 
-        stripButton = UIStyle.primaryButton("去除隔离", target: self, action: #selector(strip))
+        stripButton = UIStyle.primaryButton(
+            L10n.tr("去除隔离", "De-Quarantine"), symbol: "checkmark.shield",
+            target: self, action: #selector(strip))
         stripButton.keyEquivalent = "\r"
         bar.addArrangedSubview(stripButton)
 
         root.addArrangedSubview(bar)
         UIStyle.fillWidth(bar, in: root)
 
-        // 让 dropView 接受拖入
-        dropView.registerForDraggedTypes([.fileURL])
         updateStripEnabled()
     }
 
@@ -123,7 +156,10 @@ final class QuarantinePanel: NSObject {
     private func reload() {
         table.reloadData()
         updateStripEnabled()
-        statusLabel.stringValue = paths.isEmpty ? "就绪 - 拖入应用后点去除隔离" : "已加入 \(paths.count) 项"
+        emptyLabel.isHidden = !paths.isEmpty
+        statusLabel.stringValue = paths.isEmpty
+            ? L10n.tr("就绪 — 拖入文件后点「去除隔离」", "Ready — drop files, then De-Quarantine")
+            : L10n.tr("已加入 \(paths.count) 项", "\(paths.count) item(s) added")
     }
 
     private func updateStripEnabled() {
@@ -150,27 +186,27 @@ final class QuarantinePanel: NSObject {
         let list = paths
         guard !list.isEmpty else { return }
         stripButton.isEnabled = false
-        statusLabel.stringValue = "去隔离中…"
+        statusLabel.stringValue = L10n.tr("去隔离中…", "De-quarantining…")
         QuarantineHelper.strip(paths: list) { [weak self] ok, fail in
             guard let self = self else { return }
             self.stripButton.isEnabled = true
             // 二次验证:再查一遍是否还有 quarantine 残留
             let remains = list.filter { QuarantineHelper.isQuarantined(path: $0) }
             if fail == 0, remains.isEmpty {
-                self.statusLabel.stringValue = "✅ 已去除隔离 \(ok) 项 — 可直接打开"
+                self.statusLabel.stringValue = L10n.tr("已去除隔离 \(ok) 项 — 可直接打开", "De-quarantined \(ok) item(s) — ready to open")
                 let alert = NSAlert()
                 alert.messageText = "✅ 去隔离成功"
                 alert.informativeText = "\(ok) 项已清除 com.apple.quarantine,可直接打开:\n" + list.joined(separator: "\n")
                 alert.alertStyle = .informational
                 alert.runModal()
             } else if remains.isEmpty {
-                self.statusLabel.stringValue = "✅ 成功 \(ok) 失败 \(fail) — 已验证无残留"
+                self.statusLabel.stringValue = L10n.tr("成功 \(ok) 失败 \(fail) — 已验证无残留", "Succeeded \(ok), failed \(fail) — verified, nothing left")
                 let alert = NSAlert()
                 alert.messageText = "✅ 去隔离完成"
                 alert.informativeText = "成功 \(ok) 失败 \(fail)\n验证:无残留隔离属性\n" + list.joined(separator: "\n")
                 alert.runModal()
             } else {
-                self.statusLabel.stringValue = "⚠️ 成功 \(ok) 失败 \(fail) — 仍有 \(remains.count) 项带隔离"
+                self.statusLabel.stringValue = L10n.tr("成功 \(ok) 失败 \(fail) — 仍有 \(remains.count) 项带隔离", "Succeeded \(ok), failed \(fail) — \(remains.count) still quarantined")
                 let alert = NSAlert()
                 alert.messageText = "⚠️ 去隔离未完全成功"
                 alert.informativeText = "成功 \(ok) 失败 \(fail)\n仍带隔离(验证 xattr -p 仍存在):\n" + remains.joined(separator: "\n") + "\n\n可在终端验证:\nxattr -p com.apple.quarantine \"路径\"  (无输出即已清除)"
@@ -267,7 +303,9 @@ private final class DropView: NSView {
                 sized.draw(in: imgRect)
             }
         }
-        let text = hovering ? "松手加入 ✓" : "拖到这里"
+        let text = hovering
+            ? L10n.tr("松手加入", "Drop to add")
+            : L10n.tr("拖到这里", "Drop here")
         let attrs: [NSAttributedString.Key: Any] = [
             .font: UIStyle.Text.reading(.medium),
             .foregroundColor: hovering ? UIStyle.Palette.accent : UIStyle.Palette.textSecondary,

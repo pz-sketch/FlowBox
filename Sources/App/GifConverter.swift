@@ -319,11 +319,11 @@ final class GifConvertPanel: NSObject, NSWindowDelegate {
 
     private func row(_ title: String, _ control: NSView) -> NSStackView {
         let s = UIStyle.hStack(spacing: UIStyle.Metrics.sp8)
-        let l = UIStyle.label(title, font: UIStyle.Text.body(), color: UIStyle.Palette.text)
+        let l = UIStyle.controlLabel(title)
         l.setAccessibilityLabel(title)
         s.addArrangedSubview(l)
         s.addArrangedSubview(control)
-        control.widthAnchor.constraint(equalToConstant: 150).isActive = true
+        control.widthAnchor.constraint(equalToConstant: UIStyle.Metrics.sliderWidth).isActive = true
         return s
     }
 

@@ -18,9 +18,8 @@ extension SettingsWindowController {
 
         // 快捷键
         let hotkeyRow = UIStyle.hStack(spacing: UIStyle.Metrics.sp8)
-        hotkeyRow.addArrangedSubview(UIStyle.label(
-            L10n.tr("录屏快捷键", "Recording Hotkey"),
-            font: UIStyle.Text.body(), color: UIStyle.Palette.text
+        hotkeyRow.addArrangedSubview(UIStyle.controlLabel(
+            L10n.tr("录屏快捷键", "Recording Hotkey"), width: UIStyle.Metrics.labelColumnWidth
         ))
         recRecorder = HotKeyRecorder()
         recRecorder.setAccessibilityLabel(L10n.tr("录屏快捷键录制器", "Recording hotkey recorder"))
@@ -37,13 +36,13 @@ extension SettingsWindowController {
         hotkeyRow.addArrangedSubview(recHotKeyHint)
         inner.addArrangedSubview(hotkeyRow)
 
-        recSystemAudioCheck = UIStyle.checkbox(
+        recSystemAudioCheck = UIStyle.switchRow(
             L10n.tr("录制系统声音(跟随画面)", "System audio (follow video)"),
             target: self, action: #selector(toggleRecSystemAudio)
         )
         inner.addArrangedSubview(recSystemAudioCheck)
 
-        recMicCheck = UIStyle.checkbox(
+        recMicCheck = UIStyle.switchRow(
             L10n.tr("录制麦克风", "Microphone"),
             target: self, action: #selector(toggleRecMic)
         )
@@ -55,7 +54,7 @@ extension SettingsWindowController {
         UIStyle.fillWidth(sep, in: inner)
 
         // 摄像头画中画
-        recCameraCheck = UIStyle.checkbox(
+        recCameraCheck = UIStyle.switchRow(
             L10n.tr("叠加摄像头画中画(录进视频,可拖动)", "Camera PiP (burn into video, draggable)"),
             target: self, action: #selector(toggleRecCamera)
         )
@@ -63,40 +62,34 @@ extension SettingsWindowController {
         inner.addArrangedSubview(recCameraCheck)
 
         let camRow = UIStyle.hStack(spacing: UIStyle.Metrics.sp8)
-        camRow.addArrangedSubview(UIStyle.label(
-            L10n.tr("画中画宽度", "PiP Width"),
-            font: UIStyle.Text.caption(), color: UIStyle.Palette.textSecondary
+        camRow.addArrangedSubview(UIStyle.controlLabel(
+            L10n.tr("画中画宽度", "PiP Width"), width: UIStyle.Metrics.labelColumnWidth
         ))
-        recCameraWidthSlider = NSSlider(value: 220, minValue: 120, maxValue: 360, target: self, action: #selector(cameraWidthChanged))
+        recCameraWidthSlider = UIStyle.slider(value: 220, min: 120, max: 360, target: self, action: #selector(cameraWidthChanged))
         recCameraWidthSlider.setAccessibilityLabel(L10n.tr("画中画宽度", "Picture-in-picture width"))
         recCameraWidthSlider.setAccessibilityHelp(L10n.tr("调整摄像头画中画宽度。", "Adjust the camera picture-in-picture width."))
-        recCameraWidthSlider.controlSize = .small
-        recCameraWidthSlider.translatesAutoresizingMaskIntoConstraints = false
         camRow.addArrangedSubview(recCameraWidthSlider)
-        recCameraWidthSlider.widthAnchor.constraint(equalToConstant: 120).isActive = true
         recCameraWidthLabel = UIStyle.valueLabel("220")
         camRow.addArrangedSubview(recCameraWidthLabel)
         inner.addArrangedSubview(camRow)
 
-        recCameraCircleCheck = UIStyle.checkbox(
+        recCameraCircleCheck = UIStyle.switchRow(
             L10n.tr("圆形裁切", "Circular crop"),
             target: self, action: #selector(toggleCameraCircle)
         )
         inner.addArrangedSubview(recCameraCircleCheck)
 
-        recCameraMirrorCheck = UIStyle.checkbox(
+        recCameraMirrorCheck = UIStyle.switchRow(
             L10n.tr("镜像(前置摄像头常用)", "Mirror (front camera)"),
             target: self, action: #selector(toggleCameraMirror)
         )
         inner.addArrangedSubview(recCameraMirrorCheck)
 
         inner.addArrangedSubview(UIStyle.hint(
-            L10n.tr("录制时会弹出可拖动的摄像头预览,拖到想要的位置后开始录/录制中也可拖,位置会自动记忆,合成进最终 .mov。首次需授权「摄像头」。", "A draggable camera preview appears before/during recording; position is remembered and composited into final .mov. Requires Camera permission."),
-            color: UIStyle.Palette.textSecondary.withAlphaComponent(0.85), maxWidth: 460, lines: 2
+            L10n.tr("录制时会弹出可拖动的摄像头预览,拖到想要的位置后开始录/录制中也可拖,位置会自动记忆,合成进最终 .mov。首次需授权「摄像头」。", "A draggable camera preview appears before/during recording; position is remembered and composited into final .mov. Requires Camera permission.")
         ))
         inner.addArrangedSubview(UIStyle.hint(
-            L10n.tr("全屏 + 带声:默认带麦克风;若无需人声可关掉麦克风。", "Fullscreen + audio: mic on by default; turn off if you don't need voice."),
-            color: UIStyle.Palette.textSecondary.withAlphaComponent(0.85), maxWidth: 460, lines: 2
+            L10n.tr("全屏 + 带声:默认带麦克风;若无需人声可关掉麦克风。", "Fullscreen + audio: mic on by default; turn off if you don't need voice.")
         ))
 
         let permissionsCard = permissionSummaryCard([
@@ -112,12 +105,10 @@ extension SettingsWindowController {
         UIStyle.fillWidth(recCard, in: stack)
 
         stack.addArrangedSubview(UIStyle.hint(
-            L10n.tr("点击菜单栏「录屏」或按快捷键开始(3秒倒计时) → 顶部悬浮条显示时长 → 点停止保存到桌面。首次需授权「屏幕录制」/「麦克风」。", "Click menu bar Recording or hotkey to start (3s countdown) → top bar shows time → Stop to save to Desktop. Requires Screen Recording / Microphone."),
-            color: UIStyle.Palette.textSecondary.withAlphaComponent(0.78), maxWidth: 460, lines: 2
+            L10n.tr("点击菜单栏「录屏」或按快捷键开始(3秒倒计时) → 顶部悬浮条显示时长 → 点停止保存到桌面。首次需授权「屏幕录制」/「麦克风」。", "Click menu bar Recording or hotkey to start (3s countdown) → top bar shows time → Stop to save to Desktop. Requires Screen Recording / Microphone.")
         ))
         stack.addArrangedSubview(UIStyle.hint(
-            L10n.tr("录屏转 GIF:菜单栏 →「录屏转 GIF…」,选 .mov/mp4 后可调帧率(5~15)与最大宽度,GIF 输出到视频同目录。", "Recording → GIF: menu bar → \"Recording → GIF…\", pick a .mov/mp4, adjust frame rate (5–15) and max width; the GIF is saved next to the video."),
-            color: UIStyle.Palette.textSecondary.withAlphaComponent(0.78), maxWidth: 460, lines: 2
+            L10n.tr("录屏转 GIF:菜单栏 →「录屏转 GIF…」,选 .mov/mp4 后可调帧率(5~15)与最大宽度,GIF 输出到视频同目录。", "Recording → GIF: menu bar → \"Recording → GIF…\", pick a .mov/mp4, adjust frame rate (5–15) and max width; the GIF is saved next to the video.")
         ))
     }
 }

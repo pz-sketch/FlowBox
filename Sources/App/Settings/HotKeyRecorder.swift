@@ -14,15 +14,20 @@ final class HotKeyRecorder: NSTextField {
 
     func styleField() {
         wantsLayer = true
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = UIStyle.Metrics.radiusS
+        layer?.cornerCurve = .continuous
         layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.14).cgColor
-        layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
-        isBezeled = true
-        bezelStyle = .roundedBezel
-        font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        textColor = .labelColor
+        isBezeled = false
+        drawsBackground = false
+        font = UIStyle.Text.mono(12)
+        textColor = UIStyle.Palette.text
         alignment = .center
+        updateBorder(accent: recording)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBorder(accent: recording)
     }
 
     var onChange: ((UInt32, UInt32) -> Void)?
@@ -82,7 +87,10 @@ final class HotKeyRecorder: NSTextField {
     }
 
     private func updateBorder(accent: Bool) {
-        layer?.borderColor = (accent ? NSColor.controlAccentColor : NSColor.separatorColor.withAlphaComponent(0.14)).cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.borderColor = (accent ? UIStyle.Palette.accent : UIStyle.Palette.controlBorder).cgColor
+            layer?.backgroundColor = UIStyle.Palette.control.cgColor
+        }
         layer?.borderWidth = accent ? 1.5 : 1
     }
     private func startRecording() {

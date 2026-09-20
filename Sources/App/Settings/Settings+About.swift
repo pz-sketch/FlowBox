@@ -135,8 +135,7 @@ extension SettingsWindowController {
             target: self, action: #selector(copyVersionInfo)))
         linkInner.addArrangedSubview(btnRow)
         linkInner.addArrangedSubview(UIStyle.hint(
-            L10n.tr("配置文件位于 ~/.config/flowbox/  ·  日志在 /tmp/flowbox-*.log", "Config in ~/.config/flowbox/  ·  Logs in /tmp/flowbox-*.log"),
-            color: UIStyle.Palette.textSecondary.withAlphaComponent(0.78), maxWidth: 460, lines: 2))
+            L10n.tr("配置文件位于 ~/Library/Application Support/FlowBox/  ·  日志在 /tmp/flowbox-*.log", "Config in ~/Library/Application Support/FlowBox/  ·  Logs in /tmp/flowbox-*.log")))
         let linkCard = cardBox(containing: linkInner)
         stack.addArrangedSubview(linkCard)
         UIStyle.fillWidth(linkCard, in: stack)
@@ -151,8 +150,7 @@ extension SettingsWindowController {
     }
 
     @objc private func openConfigFolder() {
-        let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".config/flowbox")
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(ConfigStore.configURL.deletingLastPathComponent())
     }
 
     @objc private func openLogFolder() {
