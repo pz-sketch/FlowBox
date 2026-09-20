@@ -26,6 +26,14 @@ public enum L10n {
     public static func isEnglish() -> Bool {
         if let o = languageOverride { return o == .en }
         if let c = cachedLanguage, let d = cacheDate, Date().timeIntervalSince(d) < cacheTTL { return c == .en }
+        let lang = resolveLanguage()
+        cachedLanguage = lang
+        cacheDate = Date()
+        return lang == .en
+    }
+
+    /// `.system` 按当前 Locale 解析,同一答案写进缓存,保证缓存命中路径与读盘路径一致。
+    private static func resolveLanguage() -> AppLanguage {
         let raw: String
         if let data = try? Data(contentsOf: ConfigStore.configURL),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -35,11 +43,10 @@ public enum L10n {
             raw = "system"
         }
         let lang: AppLanguage = AppLanguage(rawValue: raw) ?? .system
-        cachedLanguage = lang
-        cacheDate = Date()
-        if lang == .zh { return false }
-        if lang == .en { return true }
-        return Locale.current.language.languageCode?.identifier != "zh"
+        if lang == .system {
+            return Locale.current.language.languageCode?.identifier == "zh" ? .zh : .en
+        }
+        return lang
     }
 
     public static func invalidateCache() { cachedLanguage = nil; cacheDate = nil }
