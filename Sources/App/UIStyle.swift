@@ -46,12 +46,16 @@ enum UIStyle {
         /// 参数行左侧标签列宽度（步进器/滑杆因此能纵向对齐）
         static let labelColumnWidth: CGFloat = 210
 
-        /// 设置窗口
-        static let windowWidth: CGFloat = 680
+        /// 设置窗口（左侧栏 + 右内容列）
+        static let windowWidth: CGFloat = 840
         /// 默认高度取「让大多数 Tab 免滚动」的值：内容更长的 Tab 在窗口内滚动，窗口本身不再随 Tab 变形
-        static let windowHeight: CGFloat = 660
-        static let minimumWindowWidth: CGFloat = 520
+        static let windowHeight: CGFloat = 640
+        static let minimumWindowWidth: CGFloat = 720
         static let minimumWindowHeight: CGFloat = 420
+
+        /// 侧边栏导航列（红绿灯压在其上方，行区从安全距离下开始）
+        static let sidebarWidth: CGFloat = 200
+        static let sidebarRowHeight: CGFloat = 34
         /// 设置窗口内容区左右内边距，也是窗口顶部留白（透明标题栏下）
         static let windowPadding: CGFloat = 24
         static let windowTopInset: CGFloat = 18
@@ -75,11 +79,16 @@ enum UIStyle {
         static var accentFaint: NSColor { accent.withAlphaComponent(0.08) }
 
         /// 三级表面：窗口 → 卡片 → 内嵌
+        /// card/cardBorder 会喂给 NSBox 自绘：带 alpha 包装的动态色在系统深浅色热切换后
+        /// 不会重新解析（实测卡片停留旧外观的颜色），必须用原生不透明动态色；
+        /// 需要 alpha 的地方走 LayerBackedView（自身在 viewDidChangeEffectiveAppearance 重解析）
         static var window: NSColor { .windowBackgroundColor }
-        static var card: NSColor { .controlBackgroundColor.withAlphaComponent(0.6) }
-        static var cardBorder: NSColor { .separatorColor.withAlphaComponent(0.65) }
+        static var card: NSColor { .controlBackgroundColor }
+        static var cardBorder: NSColor { .separatorColor }
         static var inset: NSColor { .separatorColor.withAlphaComponent(0.07) }
-        static var control: NSColor { .controlBackgroundColor.withAlphaComponent(0.92) }
+        /// 图标按钮底:原生动态色(不带 alpha)——带 alpha 的色喂给 LayerBacked 系后,
+        /// 外观热切换若 viewDidChangeEffectiveAppearance 传播缺失,layer 上会钉死旧外观颜色(实测黑块按钮)
+        static var control: NSColor { .controlBackgroundColor }
         static var controlBorder: NSColor { .separatorColor.withAlphaComponent(0.45) }
         static var hairline: NSColor { .separatorColor.withAlphaComponent(0.4) }
 
@@ -516,6 +525,109 @@ enum UIStyle {
         SwitchRow(title: title, target: target, action: action)
     }
 
+    /// 侧边栏导航行：SF Symbol + 文字，普通 / 悬停 / 选中三态
+    ///
+    /// 选中态用强调色胶囊 + 白字白图标（与收纳菜单 MenuRowView 的自绘高亮同一手法），
+    /// 不依赖系统控件高亮；底色走 LayerBackedView，深浅色切换自动重解析。
+    final class SidebarRow: NSView {
+
+        private let background = LayerBackedView()
+        private let iconView = NSImageView()
+        private let titleLabel: NSTextField
+        private var isHovered = false { didSet { updateAppearance() } }
+
+        /// 选中态由导航容器统一维护（行自身不互斥）
+        var isSelected = false { didSet { updateAppearance() } }
+
+        var target: AnyObject?
+        var action: Selector?
+
+        init(symbol: String, title: String, target: AnyObject?, action: Selector?) {
+            self.target = target
+            self.action = action
+            self.titleLabel = label(title, font: Text.body(.medium), color: Palette.text)
+            super.init(frame: .zero)
+            translatesAutoresizingMaskIntoConstraints = false
+
+            background.translatesAutoresizingMaskIntoConstraints = false
+            background.radius = Metrics.radiusM
+            addSubview(background)
+
+            iconView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+            iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+            iconView.contentTintColor = Palette.textSecondary
+            iconView.imageScaling = .scaleProportionallyDown
+            iconView.translatesAutoresizingMaskIntoConstraints = false
+
+            // 手动摆而不走 NSStackView:图标要相对文字做 1pt 视觉下沉,
+            // stack 的 centerY 对齐约束会与该微调打架
+            addSubview(iconView)
+            addSubview(titleLabel)
+
+            NSLayoutConstraint.activate([
+                background.leadingAnchor.constraint(equalTo: leadingAnchor),
+                background.trailingAnchor.constraint(equalTo: trailingAnchor),
+                background.topAnchor.constraint(equalTo: topAnchor),
+                background.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+                // 图标统一 18×18 视觉框:SF Symbol intrinsic 随形状变化(宽扁/高瘦),
+                // 无框时各行图标基线参差;固定方框 + 等比缩放让所有行图标视觉体量一致
+                iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.sp10),
+                iconView.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
+                iconView.widthAnchor.constraint(equalToConstant: 18),
+                iconView.heightAnchor.constraint(equalToConstant: 18),
+                // 中文字形重心偏下、符号笔画重心偏上,图标相对行中心再沉 1pt 视觉才齐
+                titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: Metrics.sp8),
+                titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+                titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -Metrics.sp10),
+
+                heightAnchor.constraint(equalToConstant: Metrics.sidebarRowHeight),
+            ])
+
+            setAccessibilityElement(true)
+            setAccessibilityRole(.button)
+            setAccessibilityLabel(title)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("not supported") }
+
+        override func mouseDown(with event: NSEvent) {
+            guard let action else { return }
+            _ = NSApp.sendAction(action, to: target, from: self)
+        }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(
+                rect: bounds,
+                options: [.mouseEnteredAndExited, .activeAlways],
+                owner: self,
+                userInfo: nil
+            ))
+        }
+
+        override func mouseEntered(with event: NSEvent) { isHovered = true }
+        override func mouseExited(with event: NSEvent) { isHovered = false }
+
+        private func updateAppearance() {
+            if isSelected {
+                background.fill = Palette.accent
+                iconView.contentTintColor = .white
+                titleLabel.textColor = .white
+            } else if isHovered {
+                background.fill = Palette.inset
+                iconView.contentTintColor = Palette.text
+                titleLabel.textColor = Palette.text
+            } else {
+                background.fill = nil
+                iconView.contentTintColor = Palette.textSecondary
+                titleLabel.textColor = Palette.text
+            }
+        }
+    }
+
     /// 主按钮：强调色填充
     @discardableResult
     static func primaryButton(_ title: String, symbol: String? = nil, target: AnyObject?, action: Selector?) -> NSButton {
@@ -659,11 +771,48 @@ enum UIStyle {
         window.contentView?.wantsLayer = true
     }
 
-    /// 在内容视图底部铺一层 HUD 材质（毛玻璃）
+    /// 外观热切换自愈视图：macOS 27 实测系统深浅色热切换后,窗口里的材质与 NSBox 动态色
+    /// 不会自动重绘(整个窗口钉死旧外观的颜色)。这个零尺寸视图在收到
+    /// viewDidChangeEffectiveAppearance 后把整棵视图树强制刷新:
+    ///  - 普通视图 needsDisplay(救 NSBox 自绘动态色)
+    ///  - LayerBackedView/Button 直接调 syncLayer()(needsDisplay 对 layer 背景无效,
+    ///    模板行图标按钮黑块就是这么漏掉的)
+    final class AppearanceKickView: NSView {
+        override func viewDidChangeEffectiveAppearance() {
+            super.viewDidChangeEffectiveAppearance()
+            guard let tree = superview else { return }
+            func kick(_ v: NSView) {
+                if let layered = v as? LayerBackedView {
+                    layered.syncLayer()
+                } else if let button = v as? LayerBackedButton {
+                    button.syncLayer()
+                }
+                v.needsDisplay = true
+                v.subviews.forEach(kick)
+            }
+            kick(tree)
+        }
+    }
+
+    /// 给窗口挂上外观热切换自愈(不占布局、不可见)
+    static func attachAppearanceKick(to content: NSView) {
+        let kicker = AppearanceKickView()
+        kicker.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(kicker)
+        NSLayoutConstraint.activate([
+            kicker.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            kicker.topAnchor.constraint(equalTo: content.topAnchor),
+            kicker.widthAnchor.constraint(equalToConstant: 0),
+            kicker.heightAnchor.constraint(equalToConstant: 0),
+        ])
+    }
+
+    /// 在内容视图底部铺一层毛玻璃（跟随系统深浅色外观）
     @discardableResult
     static func attachHUDMaterial(to content: NSView) -> NSVisualEffectView {
         let bg = NSVisualEffectView()
-        bg.material = .hudWindow
+        // underWindowBackground 随系统外观明暗变化；hudWindow 在深色模式下仍偏浅，会让内容列在深色系统里发白
+        bg.material = .underWindowBackground
         bg.blendingMode = .behindWindow
         bg.state = .active
         bg.translatesAutoresizingMaskIntoConstraints = false
@@ -674,6 +823,7 @@ enum UIStyle {
             bg.topAnchor.constraint(equalTo: content.topAnchor),
             bg.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
+        attachAppearanceKick(to: content)
         return bg
     }
 
@@ -709,10 +859,9 @@ enum UIStyle {
         scroll.documentView = document
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
-        scroll.hasVerticalScroller = true
+        // 不显示滚动条(用户指定):内容超出时靠滚轮/触控板滚动,视觉更接近系统设置
+        scroll.hasVerticalScroller = false
         scroll.hasHorizontalScroller = false
-        scroll.autohidesScrollers = true
-        scroll.scrollerStyle = .overlay
         scroll.verticalScrollElasticity = .allowed
         page.addSubview(scroll)
 

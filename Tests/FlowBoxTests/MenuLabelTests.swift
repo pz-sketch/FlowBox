@@ -33,10 +33,12 @@ struct MenuLabelTests {
 
     @Test func fallbackTitleNeverEmpty() {
         // 用户要求:不许出现 `?`/空标题行,包名/窗口名都可以显示
+        // 匿名兜底名走 L10n,期望值同样用 L10n 计算,中英文环境都稳定
+        let anonymous = { (n: Int) in L10n.tr("菜单栏图标", "Menu bar icon") + " \(n)" }
         #expect(MenuLabel.fallbackTitle(winName: "com.tencent.qq", bundleID: nil, windowNumber: 1) == "com.tencent.qq")
         #expect(MenuLabel.fallbackTitle(winName: "  电池  ", bundleID: nil, windowNumber: 2) == "电池")
-        #expect(MenuLabel.fallbackTitle(winName: "Item-0", bundleID: nil, windowNumber: 8617) == "菜单栏图标 8617")
+        #expect(MenuLabel.fallbackTitle(winName: "Item-0", bundleID: nil, windowNumber: 8617) == anonymous(8617))
         #expect(MenuLabel.fallbackTitle(winName: "", bundleID: "com.tencent.qq", windowNumber: 3) == "com.tencent.qq")
-        #expect(MenuLabel.fallbackTitle(winName: "", bundleID: nil, windowNumber: 4) == "菜单栏图标 4")
+        #expect(MenuLabel.fallbackTitle(winName: "", bundleID: nil, windowNumber: 4) == anonymous(4))
     }
 }

@@ -910,6 +910,27 @@ private final class CameraPreviewPanel: NSPanel {
 
 // MARK: - 顶部悬浮控制条
 
+/// HUD 悬浮条按钮：悬停时底色提亮（HUD 色是固定色，无需动态色重解析）
+private final class HUDPillButton: UIStyle.LayerBackedButton {
+    var normalFill: NSColor = .clear { didSet { if !hovered { fill = normalFill } } }
+    var hoverFill: NSColor = .clear
+    private var hovered = false { didSet { fill = hovered ? hoverFill : normalFill } }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self,
+            userInfo: nil
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
+}
+
 private final class RecordingControlPanel: NSPanel {
     private weak var recorder: ScreenRecorder?
     private let timeLabel = NSTextField(labelWithString: L10n.tr("● 录制中 00:00", "● Recording 00:00"))
@@ -919,7 +940,7 @@ private final class RecordingControlPanel: NSPanel {
 
     init(recorder: ScreenRecorder) {
         self.recorder = recorder
-        let w: CGFloat = 300, h: CGFloat = 36
+        let w: CGFloat = 300, h: CGFloat = 40
         let screenFrame = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let origin = NSPoint(x: screenFrame.midX - w / 2, y: screenFrame.maxY - h - 24)
         super.init(contentRect: NSRect(origin: origin, size: NSSize(width: w, height: h)),
@@ -944,21 +965,22 @@ private final class RecordingControlPanel: NSPanel {
         timeLabel.font = UIStyle.Text.hudMono(13, weight: .semibold)
         timeLabel.textColor = UIStyle.Palette.HUD.text
         timeLabel.alignment = .left
-        timeLabel.frame = NSRect(x: 14, y: 9, width: 130, height: 18)
+        timeLabel.frame = NSRect(x: 14, y: 11, width: 140, height: 18)
         container.addSubview(timeLabel)
 
-        let sep = NSView(frame: NSRect(x: 150, y: 6, width: 1, height: 24))
+        let sep = NSView(frame: NSRect(x: 154, y: 6, width: 1, height: 28))
         sep.wantsLayer = true
         sep.layer?.backgroundColor = UIStyle.Palette.HUD.separator.cgColor
         container.addSubview(sep)
 
-        func pill(_ title: String, systemImage: String, bg: NSColor, fg: NSColor, action: Selector) -> NSButton {
-            let b = NSButton(title: "", target: self, action: action)
+        func pill(_ title: String, systemImage: String, bg: NSColor, fg: NSColor, action: Selector) -> HUDPillButton {
+            let b = HUDPillButton()
             b.bezelStyle = .inline
             b.isBordered = false
-            b.wantsLayer = true
-            b.layer?.backgroundColor = bg.cgColor
-            b.layer?.cornerRadius = UIStyle.Metrics.hudRadiusS
+            b.normalFill = bg
+            b.hoverFill = bg.blended(withFraction: 0.18, of: .white) ?? bg
+            b.fill = bg
+            b.radius = UIStyle.Metrics.hudRadiusS
             if let img = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil) {
                 img.isTemplate = true
                 b.image = img
@@ -968,20 +990,22 @@ private final class RecordingControlPanel: NSPanel {
                 .foregroundColor: fg, .font: UIStyle.Text.hudText(12),
             ])
             b.contentTintColor = fg
+            b.target = self
+            b.action = action
             b.setAccessibilityElement(true)
             b.setAccessibilityLabel(title)
             b.setAccessibilityHelp(title)
             return b
         }
         let stop = pill(L10n.tr("停止", "Stop"), systemImage: "stop.fill", bg: NSColor.systemRed, fg: .white, action: #selector(doStop))
-        stop.frame = NSRect(x: 160, y: 5, width: 66, height: 26)
+        stop.frame = NSRect(x: 164, y: 6, width: 66, height: 28)
         container.addSubview(stop)
         actionButtons.append(stop)
 
         let cancel = pill(L10n.tr("取消", "Cancel"), systemImage: "xmark", bg: UIStyle.Palette.HUD.text, fg: NSColor(white: 0.2, alpha: 1), action: #selector(doCancel))
-        cancel.frame = NSRect(x: 232, y: 5, width: 60, height: 26)
-        cancel.layer?.borderColor = UIStyle.Palette.HUD.toolbarBorderOuter.cgColor
-        cancel.layer?.borderWidth = 1
+        cancel.frame = NSRect(x: 236, y: 6, width: 60, height: 28)
+        cancel.stroke = UIStyle.Palette.HUD.toolbarBorderOuter
+        cancel.strokeWidth = 1
         container.addSubview(cancel)
         actionButtons.append(cancel)
         timeLabel.setAccessibilityElement(true)
@@ -1040,32 +1064,70 @@ private final class CountdownPanel: NSPanel {
         hidesOnDeactivate = false
         sharingType = .none
 
+        // 中央内容用 Auto Layout 居中，数字/提示/按钮间距不再随屏幕尺寸写死
+        guard let cv = contentView else { return }
+        let center = NSView()
+        center.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(center)
+
         label.font = UIStyle.Text.hudText(120, weight: .bold)
         label.textColor = UIStyle.Palette.HUD.text
         label.alignment = .center
         label.backgroundColor = .clear
         label.isBezeled = false
         label.isEditable = false
-        label.frame = NSRect(x: frame.width / 2 - 120, y: frame.height / 2 - 60, width: 240, height: 140)
+        label.translatesAutoresizingMaskIntoConstraints = false
         label.setAccessibilityElement(true)
         label.setAccessibilityLabel(L10n.tr("录屏倒计时", "Recording countdown"))
-        contentView?.addSubview(label)
+        center.addSubview(label)
 
         let hint = NSTextField(labelWithString: L10n.tr("即将开始全屏录制  ·  顶部控制条可停止", "Fullscreen recording will start  ·  Use top bar to stop"))
         hint.font = UIStyle.Text.hudText(14, weight: .medium)
         hint.textColor = UIStyle.Palette.HUD.textDim
         hint.alignment = .center
-        hint.frame = NSRect(x: frame.width / 2 - 200, y: frame.height / 2 - 100, width: 400, height: 20)
+        hint.translatesAutoresizingMaskIntoConstraints = false
         hint.setAccessibilityElement(true)
         hint.setAccessibilityLabel(L10n.tr("录屏提示：按 Esc 取消", "Recording hint: press Esc to cancel"))
-        contentView?.addSubview(hint)
+        center.addSubview(hint)
 
-        let cancel = NSButton(title: L10n.tr("取消录制", "Cancel Recording"), target: self, action: #selector(cancelRecording))
-        cancel.bezelStyle = .rounded
-        cancel.frame = NSRect(x: frame.width / 2 - 70, y: frame.height / 2 - 145, width: 140, height: 30)
+        // HUD 风格按钮：半透明白底 + 描边，与深色遮罩统一（系统 rounded 按钮压在遮罩上太突兀）
+        let cancel = HUDPillButton()
+        cancel.bezelStyle = .inline
+        cancel.isBordered = false
+        cancel.normalFill = NSColor.white.withAlphaComponent(0.14)
+        cancel.hoverFill = NSColor.white.withAlphaComponent(0.24)
+        cancel.fill = cancel.normalFill
+        cancel.stroke = UIStyle.Palette.HUD.panelBorder
+        cancel.strokeWidth = 1
+        cancel.radius = UIStyle.Metrics.hudRadiusS
+        cancel.attributedTitle = NSAttributedString(string: L10n.tr("取消录制", "Cancel Recording"), attributes: [
+            .foregroundColor: UIStyle.Palette.HUD.text, .font: UIStyle.Text.hudText(13),
+        ])
+        cancel.contentTintColor = UIStyle.Palette.HUD.text
+        cancel.target = self
+        cancel.action = #selector(cancelRecording)
+        cancel.translatesAutoresizingMaskIntoConstraints = false
+        cancel.setAccessibilityElement(true)
         cancel.setAccessibilityLabel(L10n.tr("取消录制", "Cancel recording"))
         cancel.setAccessibilityHelp(L10n.tr("按 Esc 也可取消", "Press Esc to cancel"))
-        contentView?.addSubview(cancel)
+        center.addSubview(cancel)
+
+        NSLayoutConstraint.activate([
+            center.centerXAnchor.constraint(equalTo: cv.centerXAnchor),
+            center.centerYAnchor.constraint(equalTo: cv.centerYAnchor),
+
+            label.topAnchor.constraint(equalTo: center.topAnchor),
+            label.centerXAnchor.constraint(equalTo: center.centerXAnchor),
+
+            hint.topAnchor.constraint(equalTo: label.bottomAnchor, constant: UIStyle.Metrics.sp12),
+            hint.centerXAnchor.constraint(equalTo: center.centerXAnchor),
+
+            cancel.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: UIStyle.Metrics.sp20),
+            cancel.bottomAnchor.constraint(equalTo: center.bottomAnchor),
+            cancel.centerXAnchor.constraint(equalTo: center.centerXAnchor),
+            cancel.widthAnchor.constraint(greaterThanOrEqualToConstant: 150),
+            cancel.heightAnchor.constraint(equalToConstant: 32),
+        ])
     }
 
     @objc private func cancelRecording() { recorder?.cancel() }

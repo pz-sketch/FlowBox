@@ -182,6 +182,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.show()
     }
 
+    /// 供 URL 深链(flowbox://settings)打开设置窗口
+    func openSettingsWindow() {
+        settings.show()
+    }
+
     @objc private func enableExtension() {
         // 直达系统设置的扩展管理页
         if let url = URL(string: "x-apple.systempreferences:com.apple.ExtensionsPreferences") {
@@ -196,20 +201,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showHelp() {
         let alert = NSAlert()
         alert.messageText = L10n.tr("极简工具箱 — 使用说明", "FlowBox — Help")
-        alert.informativeText = """
-        1. 在 Finder 任意位置右键,即可看到「FlowBox」子菜单
-        2. 功能:复制当前目录路径 / 复制所选文件路径 / 在终端中打开 / 新建文件
-        3. 按快捷键(默认 ⌥A)框选截图:画笔 / 马赛克标注后 Enter 复制到剪贴板
-        4. 点击菜单栏图标 →「设置…」可自定义功能、模板与截图快捷键,改动即时生效
-        5. 菜单栏 →「录屏转 GIF…」可把录屏 .mov(或任意 mov/mp4)转成 GIF,帧率/宽度可选
+        alert.informativeText = L10n.tr(
+            """
+            1. 在 Finder 任意位置右键,即可看到「FlowBox」子菜单
+            2. 功能:复制当前目录路径 / 复制所选文件路径 / 在终端中打开 / 新建文件
+            3. 按快捷键(默认 ⌥A)框选截图:画笔 / 马赛克标注后 Enter 复制到剪贴板
+            4. 点击菜单栏图标 →「设置…」可自定义功能、模板与截图快捷键,改动即时生效
+            5. 菜单栏 →「录屏转 GIF…」可把录屏 .mov(或任意 mov/mp4)转成 GIF,帧率/宽度可选
 
-        首次使用「在终端中打开」时,系统会弹一次「控制 Terminal」的授权,允许即可。
-        首次截屏需授权「屏幕录制」,授权后重启本应用生效。
-        设置 →「人脸」可开启离开自动锁屏(本地检测,不联网不存图;锁后仍需密码/Touch ID 解锁)。
-        如果右键菜单没出现,试试重启 Finder。
-        """
+            首次使用「在终端中打开」时,系统会弹一次「控制 Terminal」的授权,允许即可。
+            首次截屏需授权「屏幕录制」,授权后重启本应用生效。
+            设置 →「人脸」可开启离开自动锁屏(本地检测,不联网不存图;锁后仍需密码/Touch ID 解锁)。
+            如果右键菜单没出现,试试重启 Finder。
+            """,
+            """
+            1. Right-click anywhere in Finder to see the "FlowBox" submenu
+            2. Features: Copy folder path / Copy selected paths / Open in Terminal / New file
+            3. Press the hotkey (default ⌥A) to capture a region: annotate with pen / mosaic, then press Enter to copy
+            4. Menu bar icon → "Settings…" to customize features, templates & hotkeys — changes apply instantly
+            5. Menu bar → "Recording → GIF…" converts a recording .mov (or any mov/mp4) to GIF with selectable fps/width
+
+            The first time you use "Open in Terminal", macOS asks once for permission to control Terminal — allow it.
+            Screen capture needs "Screen Recording" permission; restart FlowBox after granting it.
+            Settings → "Presence" enables auto-lock when you leave (on-device detection, no network, no images; unlocking still requires password/Touch ID).
+            If the context menu doesn't appear, try restarting Finder.
+            """
+        )
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "好的")
+        alert.addButton(withTitle: L10n.tr("好的", "OK"))
         alert.runModal()
     }
 }
@@ -218,14 +237,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         let shot = AppConfig.load().screenshot
-        screenshotItem.title = L10n.tr("截屏", "Screenshot") + "(\(HotKeyCenter.comboName(keyCode: UInt32(shot.hotKeyCode), modifiers: UInt32(shot.hotKeyModifiers))))"
+        screenshotItem.title = L10n.tr(
+            "截屏（\(HotKeyCenter.comboName(keyCode: UInt32(shot.hotKeyCode), modifiers: UInt32(shot.hotKeyModifiers)))）",
+            "Screenshot (\(HotKeyCenter.comboName(keyCode: UInt32(shot.hotKeyCode), modifiers: UInt32(shot.hotKeyModifiers))))"
+        )
         let rec = AppConfig.load().recording
         if ScreenRecorder.shared.isRecording {
             recordingItem.title = L10n.tr("■ 停止录制", "■ Stop Recording")
         } else if ScreenRecorder.shared.isCountingDown {
             recordingItem.title = L10n.tr("录屏(倒计时中…)", "Recording (countdown…)" )
         } else {
-            recordingItem.title = L10n.tr("录屏", "Recording") + "(\(HotKeyCenter.comboName(keyCode: UInt32(rec.hotKeyCode), modifiers: UInt32(rec.hotKeyModifiers))))"
+            recordingItem.title = L10n.tr(
+                "录屏（\(HotKeyCenter.comboName(keyCode: UInt32(rec.hotKeyCode), modifiers: UInt32(rec.hotKeyModifiers)))）",
+                "Recording (\(HotKeyCenter.comboName(keyCode: UInt32(rec.hotKeyCode), modifiers: UInt32(rec.hotKeyModifiers))))"
+            )
         }
     }
 }
@@ -285,6 +310,8 @@ enum CommandExecutor {
             if let b64 = query["data"], let data = Data(base64Encoded: b64) {
                 acceptConfigSync(data)
             }
+        case "settings":
+            (NSApp.delegate as? AppDelegate)?.openSettingsWindow()
         default:
             NSLog("[FlowBox] 宿主:未知命令 \(url.host ?? "?")")
         }

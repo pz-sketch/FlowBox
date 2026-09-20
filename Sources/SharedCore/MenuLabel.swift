@@ -25,12 +25,17 @@ public enum MenuLabel {
         let t = winName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !t.isEmpty {
             if t == "Item-0" || (t.hasPrefix("Item-") && Int(t.dropFirst(5)) != nil) {
-                return "菜单栏图标 \(windowNumber)"
+                return anonymousLabel(windowNumber)
             }
             return t
         }
         if let b = bundleID, !b.isEmpty { return b }
-        return "菜单栏图标 \(windowNumber)"
+        return anonymousLabel(windowNumber)
+    }
+
+    /// 匿名状态项的显示名（双语，避免英文系统下兜底行仍是中文）
+    private static func anonymousLabel(_ windowNumber: Int) -> String {
+        L10n.tr("菜单栏图标", "Menu bar icon") + " \(windowNumber)"
     }
 
     /// 是否含 CJK 字符（汉字本体、扩展 A、兼容区、中文标点、全角块）。

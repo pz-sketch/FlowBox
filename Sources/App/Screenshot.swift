@@ -311,13 +311,27 @@ final class ToastWindow: NSPanel {
         let boxW = textSize.width + padding * 2
         let boxH = textSize.height + 14
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: boxW, height: boxH))
+        // 外扩宿主视图给投影留出空间（窗口边界会裁掉超出内容区的阴影）
+        let shadowMargin: CGFloat = 20
+        let host = NSView(frame: NSRect(x: 0, y: 0, width: boxW + shadowMargin * 2, height: boxH + shadowMargin * 2))
+
+        let container = NSView(frame: NSRect(x: shadowMargin, y: shadowMargin, width: boxW, height: boxH))
         container.wantsLayer = true
         container.layer?.backgroundColor = UIStyle.Palette.HUD.toastFill.cgColor
         container.layer?.cornerRadius = UIStyle.Metrics.radiusM
         container.layer?.cornerCurve = .continuous
         container.layer?.borderWidth = 1
         container.layer?.borderColor = UIStyle.Palette.HUD.panelBorder.cgColor
+        container.layer?.shadowColor = UIStyle.Palette.HUD.shadow.cgColor
+        container.layer?.shadowOpacity = 1
+        container.layer?.shadowRadius = 10
+        container.layer?.shadowOffset = NSSize(width: 0, height: 2)
+        container.layer?.shadowPath = CGPath(
+            roundedRect: container.bounds,
+            cornerWidth: UIStyle.Metrics.radiusM,
+            cornerHeight: UIStyle.Metrics.radiusM,
+            transform: nil
+        )
         let label = NSTextField(labelWithString: text)
         label.font = font
         label.textColor = UIStyle.Palette.HUD.text
@@ -328,9 +342,15 @@ final class ToastWindow: NSPanel {
             height: textSize.height
         )
         container.addSubview(label)
+        host.addSubview(container)
 
         let window = ToastWindow(
-            contentRect: NSRect(x: center.x - boxW / 2, y: center.y - boxH / 2, width: boxW, height: boxH),
+            contentRect: NSRect(
+                x: center.x - host.bounds.width / 2,
+                y: center.y - host.bounds.height / 2,
+                width: host.bounds.width,
+                height: host.bounds.height
+            ),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -340,7 +360,7 @@ final class ToastWindow: NSPanel {
         window.backgroundColor = .clear
         window.hasShadow = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        window.contentView = container
+        window.contentView = host
         window.alphaValue = 0
         window.orderFront(nil)
         NSAnimationContext.runAnimationGroup { context in

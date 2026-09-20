@@ -20,24 +20,8 @@ extension SettingsWindowController {
             bottom: UIStyle.Metrics.sp8, right: UIStyle.Metrics.sp8
         )
 
-        let scrollView = NSScrollView()
-        scrollView.documentView = listStack
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.scrollerStyle = .overlay
-        scrollView.drawsBackground = false
-        scrollView.borderType = .noBorder
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            scrollView.heightAnchor.constraint(equalToConstant: 260),
-            listStack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
-            listStack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
-            listStack.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
-            listStack.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
-        ])
-        // 列表用卡片包裹：滚动条浮在卡片内缘，边框不再被它压住
-        let listCard = UIStyle.card(scrollView, padding: 0)
+        // 列表自然撑开、一屏全部展示(用户指定不滚动);模板特别多时由页面级滚动兜底
+        let listCard = UIStyle.card(listStack, padding: 0)
         stack.addArrangedSubview(listCard)
         UIStyle.fillWidth(listCard, in: stack)
 

@@ -23,7 +23,7 @@ func settingsDebugLog(_ message: String) {
 /// 布局为分页式(Tab),避免单页过长
 final class SettingsWindowController: NSObject, NSWindowDelegate {
 
-    var window: NSWindow!
+    var window: SettingsWindow!
     var menuChecks: [String: UIStyle.SwitchRow] = [:]
     var listStack: NSStackView!
     var reverseCheck: UIStyle.SwitchRow!
@@ -94,97 +94,115 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     // MARK: - 界面构建
 
-    var segmented: NSSegmentedControl!
+    var sidebarRows: [UIStyle.SidebarRow] = []
+    var sidebarPages: [NSView] = []
     var tabView: NSTabView!
 
-    @objc private func segmentedChanged(_ sender: NSSegmentedControl) {
-        tabView.selectTabViewItem(at: sender.selectedSegment)
+    /// 分类定义（顺序与下方 buildXxxTab 调用一一对应）
+    private static let categories: [(zh: String, en: String, symbol: String)] = [
+        ("菜单", "Menu", "list.bullet.indent"),
+        ("鼠标", "Mouse", "computermouse"),
+        ("模板", "Templates", "doc.badge.plus"),
+        ("截图", "Screenshot", "camera.viewfinder"),
+        ("录屏", "Recording", "video.badge.waveform"),
+        ("人脸", "Presence", "person.crop.circle.badge.checkmark"),
+        ("关于", "About", "info.circle"),
+    ]
+
+    @objc private func sidebarRowClicked(_ sender: UIStyle.SidebarRow) {
+        guard let index = sidebarRows.firstIndex(of: sender) else { return }
+        selectCategory(index)
+    }
+
+    /// 切换分类并记住选择（下次打开直接定位到上次的分类）
+    func selectCategory(_ index: Int) {
+        guard sidebarRows.indices.contains(index) else { return }
+        for (i, row) in sidebarRows.enumerated() {
+            row.isSelected = (i == index)
+            if i < sidebarPages.count { sidebarPages[i].isHidden = (i != index) }
+        }
+        UserDefaults.standard.set(index, forKey: "settingsSelectedTab")
     }
 
     private func buildWindow() {
-        window = NSWindow(
+        window = SettingsWindow(
             contentRect: NSRect(x: 0, y: 0, width: UIStyle.Metrics.windowWidth, height: UIStyle.Metrics.windowHeight),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
+        window.keyHandler = self
         window.title = "FlowBox"
         UIStyle.applyWindowChrome(window, subtitle: L10n.tr("设置", "Settings"))
         window.minSize = NSSize(width: UIStyle.Metrics.minimumWindowWidth, height: UIStyle.Metrics.minimumWindowHeight)
         window.delegate = self
         if let savedFrame = UserDefaults.standard.string(forKey: "settingsWindowFrame") {
-            window.setFrame(NSRectFromString(savedFrame), display: false)
+            // 旧版窗口比现在窄，恢复位置时先夹到最小尺寸
+            var frame = NSRectFromString(savedFrame)
+            frame.size.width = max(frame.size.width, window.minSize.width)
+            frame.size.height = max(frame.size.height, window.minSize.height)
+            window.setFrame(frame, display: false)
         } else {
             window.center()
         }
 
         guard let content = window.contentView else { return }
-        UIStyle.attachHUDMaterial(to: content)
+        // 内容列不铺满窗材质,纯 windowBackground 跟手最稳;
+        // NSBox 动态色与外观热切换的兼容由 attachAppearanceKick 兜底(全树 needsDisplay)
+        UIStyle.attachAppearanceKick(to: content)
 
-        let root = UIStyle.vStack(spacing: UIStyle.Metrics.sp14)
-        content.addSubview(root)
-        NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: UIStyle.Metrics.windowPadding),
-            root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -UIStyle.Metrics.windowPadding),
-            root.topAnchor.constraint(equalTo: content.topAnchor, constant: UIStyle.Metrics.windowTopInset),
-            root.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -UIStyle.Metrics.sp12),
-        ])
+        // 侧栏材质必须用 withinWindow 混合:behindWindow 实测会把整个窗口钉死在
+        // 切换前的外观(系统深→浅热切换后窗口全亮、浅→深全白),withinWindow 双向跟手
+        let sidebarMaterial = NSVisualEffectView()
+        sidebarMaterial.material = .sidebar
+        sidebarMaterial.blendingMode = .withinWindow
+        sidebarMaterial.state = .active
+        sidebarMaterial.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(sidebarMaterial)
+        
+        let divider = UIStyle.LayerBackedView()
+        divider.fill = UIStyle.Palette.hairline
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(divider)
 
-        let header = UIStyle.hStack(spacing: UIStyle.Metrics.sp10)
-        let icon = NSImageView()
-        if let appIcon = NSApp.applicationIconImage {
-            icon.image = appIcon
-        } else if let img = NSImage(systemSymbolName: "sparkles.rectangle.stack", accessibilityDescription: nil) {
-            icon.image = img
-            icon.contentTintColor = UIStyle.Palette.accent
-            icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 22, weight: .regular)
+        // ===== 侧栏：分类导航行（锚顶部）+ 版本号（锚底部）=====
+        // 行区与版本号之间不设贯穿视图：侧栏整体上下钉死时，
+        // makeKey 布局会把窗口高度压到侧栏内容高度（实测 312pt 的布局循环）
+        let sidebar = UIStyle.vStack(spacing: UIStyle.Metrics.sp2)
+        sidebar.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(sidebar)
+        for category in Self.categories {
+            let row = UIStyle.SidebarRow(
+                symbol: category.symbol,
+                title: L10n.tr(category.zh, category.en),
+                target: self,
+                action: #selector(sidebarRowClicked(_:))
+            )
+            sidebarRows.append(row)
+            sidebar.addArrangedSubview(row)
+            UIStyle.fillWidth(row, in: sidebar)
         }
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.widthAnchor.constraint(equalToConstant: UIStyle.Metrics.chipSize).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: UIStyle.Metrics.chipSize).isActive = true
-        icon.wantsLayer = true
-        icon.layer?.cornerRadius = UIStyle.Metrics.radiusM
-        icon.layer?.masksToBounds = true
-        header.addArrangedSubview(icon)
-
-        let titleStack = UIStyle.vStack(spacing: 1)
-        titleStack.addArrangedSubview(UIStyle.label("FlowBox", font: UIStyle.Text.display(), color: UIStyle.Palette.text))
-        titleStack.addArrangedSubview(UIStyle.label(
-            L10n.tr("轻量 · 高效 · 不打扰", "Lightweight · Efficient · Unobtrusive"),
-            font: UIStyle.Text.micro(), color: UIStyle.Palette.textSecondary))
-        header.addArrangedSubview(titleStack)
-        header.addArrangedSubview(UIStyle.spacer())
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
-        header.addArrangedSubview(UIStyle.pill("v" + version, font: UIStyle.Text.mono(10), color: UIStyle.Palette.textTertiary))
-        root.addArrangedSubview(header)
-        UIStyle.fillWidth(header, in: root)
+        let versionPill = UIStyle.pill("v" + version, font: UIStyle.Text.mono(10), color: UIStyle.Palette.textTertiary)
+        versionPill.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(versionPill)
 
-        let seg = NSSegmentedControl(labels: [L10n.tr("菜单", "Menu"), L10n.tr("鼠标", "Mouse"), L10n.tr("模板", "Templates"), L10n.tr("截图", "Screenshot"), L10n.tr("录屏", "Recording"), L10n.tr("人脸", "Presence"), L10n.tr("关于", "About")], trackingMode: .selectOne, target: self, action: #selector(segmentedChanged))
-        seg.selectedSegment = 0
-        seg.segmentStyle = .rounded
-        seg.controlSize = .regular
-        if #available(macOS 13.0, *) { seg.segmentDistribution = .fillEqually }
-        // 为每段配 SF Symbol，让导航更直觉、更轻
-        let symbols = ["list.bullet.indent", "computermouse", "doc.badge.plus", "camera.viewfinder", "video.badge.waveform", "person.crop.circle.badge.checkmark", "info.circle"]
-        for (i, sym) in symbols.enumerated() {
-            if let img = NSImage(systemSymbolName: sym, accessibilityDescription: nil) {
-                seg.setImage(img, forSegment: i)
-                seg.setImageScaling(.scaleProportionallyDown, forSegment: i)
-            }
-        }
-        seg.translatesAutoresizingMaskIntoConstraints = false
-        root.addArrangedSubview(seg)
-        UIStyle.fillWidth(seg, in: root)
-        segmented = seg
+        // ===== 内容列：页面滚动区 + 底部状态行 =====
+        let column = NSView()
+        column.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(column)
+
+        // 页面宿主：自管理的弹性容器。不把 NSTabView 放进视图树——
+        // 带多页内容的 NSTabView 高度不可拉伸，上下钉死的等式链会让
+        // AppKit 在 makeKey 时把窗口整个压到内容 fitting 最小尺寸。
+        // tabView 仅作脚手架数据源，真正的页面挂在 pageHost 上切换。
+        let pageHost = NSView()
+        pageHost.translatesAutoresizingMaskIntoConstraints = false
+        column.addSubview(pageHost)
 
         tabView = NSTabView()
         tabView.tabViewType = .noTabsNoBorder
         tabView.tabViewBorderType = .none
-        tabView.translatesAutoresizingMaskIntoConstraints = false
-        tabView.wantsLayer = true
-        root.addArrangedSubview(tabView)
-        UIStyle.fillWidth(tabView, in: root)
-        tabView.heightAnchor.constraint(greaterThanOrEqualToConstant: 408).isActive = true
 
         buildMenuTab(tabView: tabView)
         buildMouseTab(tabView: tabView)
@@ -193,23 +211,88 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         buildRecordingTab(tabView: tabView)
         buildPresenceTab(tabView: tabView)
         buildAboutTab(tabView: tabView)
-        applySettingsAccessibility(in: content)
+
+        var pages: [NSView] = []
+        for item in tabView.tabViewItems {
+            guard let page = item.view else { continue }
+            page.translatesAutoresizingMaskIntoConstraints = false
+            pageHost.addSubview(page)
+            NSLayoutConstraint.activate([
+                page.leadingAnchor.constraint(equalTo: pageHost.leadingAnchor),
+                page.trailingAnchor.constraint(equalTo: pageHost.trailingAnchor),
+                page.topAnchor.constraint(equalTo: pageHost.topAnchor),
+                page.bottomAnchor.constraint(equalTo: pageHost.bottomAnchor),
+            ])
+            page.isHidden = true
+            pages.append(page)
+        }
+        sidebarPages = pages
 
         let footerSep = separatorView()
-        root.addArrangedSubview(footerSep)
-        UIStyle.fillWidth(footerSep, in: root)
+        footerSep.translatesAutoresizingMaskIntoConstraints = false
+        column.addSubview(footerSep)
 
         let footer = UIStyle.hStack(spacing: UIStyle.Metrics.sp6)
+        footer.translatesAutoresizingMaskIntoConstraints = false
         footer.addArrangedSubview(UIStyle.statusDot(UIStyle.Palette.success.withAlphaComponent(0.9)))
         footer.addArrangedSubview(UIStyle.label(
             L10n.tr("改动即时生效 · 自动同步到配置文件", "Changes apply instantly · Auto-synced to config file"),
             font: UIStyle.Text.micro(), color: UIStyle.Palette.textSecondary))
         footer.addArrangedSubview(UIStyle.spacer())
         footer.addArrangedSubview(UIStyle.label(
-            L10n.tr("⌘ ,  快速打开", "⌘ ,  to open quickly"),
+            L10n.tr("⌘1–7 切换分类 · ⌘, 快速打开", "⌘1–7 switch category · ⌘, quick open"),
             font: UIStyle.Text.footnote(), color: UIStyle.Palette.textTertiary))
-        root.addArrangedSubview(footer)
-        UIStyle.fillWidth(footer, in: root)
+        column.addSubview(footer)
+
+        NSLayoutConstraint.activate([
+            sidebarMaterial.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            sidebarMaterial.widthAnchor.constraint(equalToConstant: UIStyle.Metrics.sidebarWidth),
+            sidebarMaterial.topAnchor.constraint(equalTo: content.topAnchor),
+            sidebarMaterial.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+
+            // 竖分隔线：只定宽。不能复用 hairline()——它带 heightAnchor==1（水平线设计），
+            // 竖着再上下钉死会把窗口内容高度也钉成 1pt，触发 AppKit 强制改窗口尺寸
+            divider.leadingAnchor.constraint(equalTo: sidebarMaterial.trailingAnchor),
+            divider.widthAnchor.constraint(equalToConstant: 1),
+            divider.topAnchor.constraint(equalTo: content.topAnchor),
+            divider.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+
+            // 侧栏行区从红绿灯安全距离下开始（只锚顶，版本号只锚底，中间不贯穿）
+            sidebar.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: UIStyle.Metrics.sp8),
+            sidebar.trailingAnchor.constraint(equalTo: sidebarMaterial.trailingAnchor, constant: -UIStyle.Metrics.sp8),
+            sidebar.topAnchor.constraint(equalTo: content.topAnchor, constant: UIStyle.Metrics.titlebarClearance + UIStyle.Metrics.sp4),
+
+            versionPill.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: UIStyle.Metrics.sp2),
+            versionPill.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -UIStyle.Metrics.sp14),
+
+            column.leadingAnchor.constraint(equalTo: divider.trailingAnchor),
+            column.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            column.topAnchor.constraint(equalTo: content.topAnchor),
+            column.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+
+            pageHost.leadingAnchor.constraint(equalTo: column.leadingAnchor),
+            pageHost.trailingAnchor.constraint(equalTo: column.trailingAnchor),
+            pageHost.topAnchor.constraint(equalTo: column.topAnchor),
+
+            footerSep.leadingAnchor.constraint(equalTo: column.leadingAnchor, constant: UIStyle.Metrics.sp20),
+            footerSep.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -UIStyle.Metrics.sp20),
+            footerSep.heightAnchor.constraint(equalToConstant: 1),
+            footerSep.topAnchor.constraint(equalTo: pageHost.bottomAnchor, constant: UIStyle.Metrics.sp10),
+
+            footer.leadingAnchor.constraint(equalTo: column.leadingAnchor, constant: UIStyle.Metrics.sp20),
+            footer.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -UIStyle.Metrics.sp20),
+            footer.topAnchor.constraint(equalTo: footerSep.bottomAnchor, constant: UIStyle.Metrics.sp8),
+            footer.bottomAnchor.constraint(equalTo: column.bottomAnchor, constant: -UIStyle.Metrics.sp12),
+        ])
+
+        sidebar.setAccessibilityLabel(L10n.tr("设置分类导航", "Settings category navigation"))
+        sidebar.setAccessibilityHelp(L10n.tr("选择菜单、鼠标、模板、截图、录屏、人脸或关于分类。", "Choose Menu, Mouse, Templates, Screenshot, Recording, Presence, or About."))
+
+        applySettingsAccessibility(in: content)
+
+        // 恢复上次停留的分类
+        let saved = UserDefaults.standard.integer(forKey: "settingsSelectedTab")
+        selectCategory(sidebarRows.indices.contains(saved) ? saved : 0)
     }
 
     /// Reusable permission status card used by feature tabs.
@@ -312,8 +395,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     /// Adds descriptive labels/help/value text without changing control behavior.
     func applySettingsAccessibility(in root: NSView) {
-        segmented?.setAccessibilityLabel(L10n.tr("设置分类导航", "Settings category navigation"))
-        segmented?.setAccessibilityHelp(L10n.tr("选择菜单、鼠标、模板、截图、录屏或关于。", "Choose Menu, Mouse, Templates, Screenshot, Recording, or About."))
         stepSlider?.setAccessibilityLabel(L10n.tr("最短滚动步长", "Minimum scroll step"))
         stepSlider?.setAccessibilityHelp(L10n.tr("调整每次滚动的最短距离。", "Adjust the minimum distance per scroll."))
         stepSlider?.setAccessibilityValue(String(format: "%.0f", stepSlider?.doubleValue ?? 0))
@@ -936,5 +1017,25 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         mosaicValueLabel.stringValue = "\(Int(sender.doubleValue)) px"
         config.screenshot.mosaicBlock = sender.doubleValue
         save()
+    }
+}
+
+/// 设置窗口：在窗口层拦截 ⌘1–⌘7 切换分类
+/// （accessory 应用没有主菜单栏，菜单项 keyEquivalent 不会生效；
+///   不用替换 contentView 的方式接按键——替换会触发 NSWindow 惰性重设 fitting 尺寸，压塌用户调过的窗口）
+final class SettingsWindow: NSWindow {
+    weak var keyHandler: SettingsWindowController?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let handler = keyHandler,
+           event.modifierFlags.contains(.command),
+           let characters = event.charactersIgnoringModifiers,
+           let first = characters.first, first.isNumber, first.isASCII,
+           let digit = Int(String(first)),
+           (1...7).contains(digit) {
+            handler.selectCategory(digit - 1)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 }

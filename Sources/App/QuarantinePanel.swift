@@ -195,21 +195,33 @@ final class QuarantinePanel: NSObject {
             if fail == 0, remains.isEmpty {
                 self.statusLabel.stringValue = L10n.tr("已去除隔离 \(ok) 项 — 可直接打开", "De-quarantined \(ok) item(s) — ready to open")
                 let alert = NSAlert()
-                alert.messageText = "✅ 去隔离成功"
-                alert.informativeText = "\(ok) 项已清除 com.apple.quarantine,可直接打开:\n" + list.joined(separator: "\n")
+                alert.messageText = L10n.tr("✅ 去隔离成功", "✅ De-quarantine Succeeded")
+                alert.informativeText = L10n.tr(
+                    "\(ok) 项已清除 com.apple.quarantine,可直接打开:",
+                    "\(ok) item(s) cleared of com.apple.quarantine, ready to open:"
+                ) + "\n" + list.joined(separator: "\n")
                 alert.alertStyle = .informational
                 alert.runModal()
             } else if remains.isEmpty {
                 self.statusLabel.stringValue = L10n.tr("成功 \(ok) 失败 \(fail) — 已验证无残留", "Succeeded \(ok), failed \(fail) — verified, nothing left")
                 let alert = NSAlert()
-                alert.messageText = "✅ 去隔离完成"
-                alert.informativeText = "成功 \(ok) 失败 \(fail)\n验证:无残留隔离属性\n" + list.joined(separator: "\n")
+                alert.messageText = L10n.tr("✅ 去隔离完成", "✅ De-quarantine Finished")
+                alert.informativeText = L10n.tr(
+                    "成功 \(ok) 失败 \(fail)\n验证:无残留隔离属性",
+                    "Succeeded \(ok), failed \(fail)\nVerified: no quarantine attributes left"
+                ) + "\n" + list.joined(separator: "\n")
                 alert.runModal()
             } else {
                 self.statusLabel.stringValue = L10n.tr("成功 \(ok) 失败 \(fail) — 仍有 \(remains.count) 项带隔离", "Succeeded \(ok), failed \(fail) — \(remains.count) still quarantined")
                 let alert = NSAlert()
-                alert.messageText = "⚠️ 去隔离未完全成功"
-                alert.informativeText = "成功 \(ok) 失败 \(fail)\n仍带隔离(验证 xattr -p 仍存在):\n" + remains.joined(separator: "\n") + "\n\n可在终端验证:\nxattr -p com.apple.quarantine \"路径\"  (无输出即已清除)"
+                alert.messageText = L10n.tr("⚠️ 去隔离未完全成功", "⚠️ De-quarantine Incomplete")
+                alert.informativeText = L10n.tr(
+                    "成功 \(ok) 失败 \(fail)\n仍带隔离(验证 xattr -p 仍存在):",
+                    "Succeeded \(ok), failed \(fail)\nStill quarantined (xattr -p still returns a value):"
+                ) + "\n" + remains.joined(separator: "\n") + "\n\n" + L10n.tr(
+                    "可在终端验证:\nxattr -p com.apple.quarantine \"路径\"  (无输出即已清除)",
+                    "Verify in Terminal:\nxattr -p com.apple.quarantine \"path\"  (empty output means cleared)"
+                )
                 alert.alertStyle = .warning
                 alert.runModal()
             }
