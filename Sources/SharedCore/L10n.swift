@@ -18,7 +18,13 @@ public enum L10n {
     private static var cacheDate: Date?
     private static let cacheTTL: TimeInterval = 1.0
 
+    /// 显式语言覆盖：设置后 isEnglish() 恒返回该语言,不再读盘、不受 TTL 影响。
+    /// 测试(TestRunner/swift-testing)用它固定语言环境——TTL 过期重读会令紧邻两次
+    /// tr() 在「配置文件出现/消失」的边界上返回不同语言,跨调用比较必然偶发翻转。
+    public static var languageOverride: AppLanguage?
+
     public static func isEnglish() -> Bool {
+        if let o = languageOverride { return o == .en }
         if let c = cachedLanguage, let d = cacheDate, Date().timeIntervalSince(d) < cacheTTL { return c == .en }
         let raw: String
         if let data = try? Data(contentsOf: ConfigStore.configURL),

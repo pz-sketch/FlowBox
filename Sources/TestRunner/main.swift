@@ -2,6 +2,9 @@ import Foundation
 import CoreGraphics
 import SharedCore
 
+// 固定语言环境:断言期望值按英文写死,不再随 CI/本机配置或 L10n 缓存 TTL 翻转
+L10n.languageOverride = .en
+
 var passed = 0, failed = 0
 func check(_ cond: Bool, _ msg: String) {
     if cond { passed += 1; print("✅ \(msg)") }
@@ -328,14 +331,14 @@ do {
     check(MenuLabel.containsCJK("输入法"), "detects cjk characters")
     check(!MenuLabel.containsCJK("Autofill"), "rejects pure ascii text")
     // 标题兜底:永远非空,不许出现空标题/`?` 行(包名/窗口名都可以显示)
-    // 匿名兜底名走 L10n,期望值用同一来源计算,中英文 CI 环境都稳定
-    let anon = { (n: Int) in L10n.tr(MenuLabel.anonymousPrefixes[0], MenuLabel.anonymousPrefixes[1]) + " \(n)" }
+    // 语言已被 languageOverride 固定为英文,期望值直接写死
     checkEq(MenuLabel.fallbackTitle(winName: "com.tencent.qq", bundleID: nil, windowNumber: 1), "com.tencent.qq", "fallback shows package name as-is")
     checkEq(MenuLabel.fallbackTitle(winName: "  电池  ", bundleID: nil, windowNumber: 2), "电池", "fallback trims whitespace")
-    checkEq(MenuLabel.fallbackTitle(winName: "Item-0", bundleID: nil, windowNumber: 8617), anon(8617), "fallback disambiguates anonymous items by window number")
+    checkEq(MenuLabel.fallbackTitle(winName: "Item-0", bundleID: nil, windowNumber: 8617), "Menu bar icon 8617", "fallback disambiguates anonymous items by window number")
     checkEq(MenuLabel.fallbackTitle(winName: "", bundleID: "com.tencent.qq", windowNumber: 3), "com.tencent.qq", "fallback uses bundleID for empty window name")
-    checkEq(MenuLabel.fallbackTitle(winName: "", bundleID: nil, windowNumber: 4), anon(4), "fallback never returns empty")
-    check(MenuLabel.isAnonymousFallback(anon(7)), "anonymous fallback title is recognized bilingually")
+    checkEq(MenuLabel.fallbackTitle(winName: "", bundleID: nil, windowNumber: 4), "Menu bar icon 4", "fallback never returns empty")
+    check(MenuLabel.isAnonymousFallback("Menu bar icon 7"), "anonymous fallback title is recognized bilingually")
+    check(MenuLabel.isAnonymousFallback("菜单栏图标 7"), "chinese fallback title is recognized")
     check(!MenuLabel.isAnonymousFallback("电池"), "named item is not an anonymous fallback")
     check(!MenuLabel.isAnonymousFallback("Menu bar icon"), "prefix without number is not a fallback")
 }

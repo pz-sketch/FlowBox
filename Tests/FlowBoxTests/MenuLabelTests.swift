@@ -4,6 +4,11 @@ import SharedCore
 @Suite("MenuLabel")
 struct MenuLabelTests {
 
+    init() {
+        // 固定语言环境,期望值不随 CI/本机配置或 L10n 缓存 TTL 翻转
+        L10n.languageOverride = .en
+    }
+
     @Test func dropsMachineIdentifiers() {
         // 状态项的窗口名经常是域名 / bundle id / autosaveName —— 都不是人话
         #expect(MenuLabel.displayable("omlx.metric.live") == "")
@@ -33,12 +38,11 @@ struct MenuLabelTests {
 
     @Test func fallbackTitleNeverEmpty() {
         // 用户要求:不许出现 `?`/空标题行,包名/窗口名都可以显示
-        // 匿名兜底名走 L10n,期望值同样用 L10n 计算,中英文环境都稳定
-        let anonymous = { (n: Int) in L10n.tr("菜单栏图标", "Menu bar icon") + " \(n)" }
+        // 语言已由 suite 固定为英文,期望值写死
         #expect(MenuLabel.fallbackTitle(winName: "com.tencent.qq", bundleID: nil, windowNumber: 1) == "com.tencent.qq")
         #expect(MenuLabel.fallbackTitle(winName: "  电池  ", bundleID: nil, windowNumber: 2) == "电池")
-        #expect(MenuLabel.fallbackTitle(winName: "Item-0", bundleID: nil, windowNumber: 8617) == anonymous(8617))
+        #expect(MenuLabel.fallbackTitle(winName: "Item-0", bundleID: nil, windowNumber: 8617) == "Menu bar icon 8617")
         #expect(MenuLabel.fallbackTitle(winName: "", bundleID: "com.tencent.qq", windowNumber: 3) == "com.tencent.qq")
-        #expect(MenuLabel.fallbackTitle(winName: "", bundleID: nil, windowNumber: 4) == anonymous(4))
+        #expect(MenuLabel.fallbackTitle(winName: "", bundleID: nil, windowNumber: 4) == "Menu bar icon 4")
     }
 }
