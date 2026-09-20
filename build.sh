@@ -123,6 +123,10 @@ cat > "${STAGING_DIR}/Ext.entitlements" <<EOF
 	<true/>
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
+	<array>
+		<string>/Library/Application Support/FlowBox/</string>
+	</array>
 </dict>
 </plist>
 EOF

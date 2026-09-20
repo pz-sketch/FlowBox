@@ -37,9 +37,10 @@ do {
     check(cfg.menu.copyFolder==true, "default menu.copyFolder true")
     check(cfg.newFiles.count>=1, "default newFiles >=1")
     checkNear(cfg.scroll.minStep, 60, "default scroll.minStep 60")
+    check(cfg.scroll.smoothScrolling==true, "default smoothScrolling on")
     checkNear(cfg.screenshot.penWidth, 4, "default penWidth 4")
     check(cfg.recording.frameRate==30, "default frameRate 30")
-    check(cfg.presence.enabled==false, "default presence off")
+    check(cfg.presence.enabled==true, "default presence on")
     checkNear(cfg.presence.lockAfterSeconds, 8, "default lockAfter 8s")
     checkNear(cfg.presence.confirmAfterSeconds, 60, "default confirmAfter 60s")
     checkNear(cfg.presence.gracePeriod, 15, "default grace 15s")
@@ -84,6 +85,22 @@ do {
     check(dec.scroll.minStep==60, "backward minStep default")
     check(dec.scroll.smoothScrolling==false, "backward smooth false")
     check(dec.presence.enabled==false, "backward presence default off")
+    // 更老的结构:scroll/presence 整节缺失,同样不自动开启新默认项
+    let json2=#"{"menu":{"copyFolder":false}}"#.data(using:.utf8)!
+    let dec2=try! JSONDecoder().decode(AppConfig.self, from:json2)
+    check(dec2.scroll.smoothScrolling==false, "legacy missing scroll section smooth off")
+    check(dec2.presence.enabled==false, "legacy missing presence section off")
+    check(dec2.schemaVersion==1, "legacy config schemaVersion 1")
+    // 1→2 迁移:翻开流畅滚动与人脸锁屏,版本号落为 2
+    let up=AppConfig.upgradeToV2(dec2)
+    check(up.scroll.smoothScrolling==true, "upgradeToV2 smooth on")
+    check(up.presence.enabled==true, "upgradeToV2 presence on")
+    check(up.schemaVersion==2, "upgradeToV2 schemaVersion 2")
+    // 迁移后用户再手动关掉:重新解码仍是 false,版本号 2 不会再次触发翻开
+    var off=up; off.scroll.smoothScrolling=false; off.presence.enabled=false
+    let offData=try! JSONEncoder().encode(off)
+    let offDec=try! JSONDecoder().decode(AppConfig.self, from:offData)
+    check(offDec.schemaVersion==2 && offDec.scroll.smoothScrolling==false && offDec.presence.enabled==false, "v2 explicit off stays off")
 }
 do {
     let a=NewFileItem(name:"X",filename:"x.docx",content:"aaa",encoding:"base64")
@@ -108,8 +125,9 @@ do {
     check(RCCommand.newFile(dir:"/tmp",index:0)?.host=="newfile", "RC newFile")
     check(RCCommand.stripQuarantine(paths:["/a","/b"]) != nil, "RC strip not nil")
     check(RCCommand.stripQuarantine(paths:[])==nil, "RC strip empty nil")
-    check(ConfigStore.configURL.path.contains("net.ai2048.flowbox.ext"), "configURL bundle")
+    check(ConfigStore.configURL.path.contains("Library/Application Support/FlowBox/config.json"), "configURL app support path")
     check(ConfigStore.configURL.path.hasSuffix("config.json"), "configURL suffix")
+    check(ConfigStore.extContainerConfigURL.path.contains("net.ai2048.flowbox.ext"), "extContainerConfigURL legacy path")
     check(!ConfigStore.realHomePath.isEmpty && ConfigStore.realHomePath.hasPrefix("/"), "realHomePath")
 }
 

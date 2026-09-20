@@ -8,6 +8,19 @@ final class FinderSync: FIFinderSync {
         super.init()
         // 把根目录注册为同步根,保证在任意位置右键都能出现菜单
         FIFinderSyncController.default().directoryURLs = [URL(fileURLWithPath: "/")]
+        syncConfigToHostIfNeeded()
+    }
+
+    /// 新配置位置(~/Library/Application Support/FlowBox/)还没有文件时,
+    /// 把本容器里的旧配置经 flowbox://cfgsync 递给宿主写盘。
+    /// macOS 27 起宿主无法读写扩展容器,旧配置只有本扩展读得到;
+    /// 宿主可能未运行,NSWorkspace 会借这条 URL 顺便把它拉起。
+    private func syncConfigToHostIfNeeded() {
+        let fm = FileManager.default
+        guard !fm.fileExists(atPath: ConfigStore.configURL.path),
+              let data = try? Data(contentsOf: ConfigStore.extContainerConfigURL),
+              let url = RCCommand.configSync(data: data.base64EncodedString()) else { return }
+        NSWorkspace.shared.open(url)
     }
 
     // MARK: - 右键菜单
@@ -15,6 +28,8 @@ final class FinderSync: FIFinderSync {
     override func menu(for menuKind: FIMenuKind) -> NSMenu {
         // Finder 只显示菜单的代理、不回扩展进程做启用验证,
         // 必须关掉自动禁用,否则菜单项点击无响应
+        // (顺带重试配置递送:宿主此前未运行/未就绪时这里补一发)
+        syncConfigToHostIfNeeded()
         let config = AppConfig.load()
         let menu = NSMenu(title: "FlowBox")
         menu.autoenablesItems = false

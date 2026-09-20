@@ -43,12 +43,36 @@ public enum RCCommand {
     public static func stripQuarantineSweep() -> URL? {
         url(host: "qxattr", query: [URLQueryItem(name: "sweep", value: "1")])
     }
+
+    /// 扩展把旧容器里的配置递给宿主落盘(data 为 config.json 内容的 base64)。
+    /// macOS 27 起宿主无法读写扩展容器,旧配置只有扩展自己读得到,
+    /// 迁移须由扩展发起、由不受限的宿主写盘。
+    public static func configSync(data: String) -> URL? {
+        url(host: "cfgsync", query: [URLQueryItem(name: "data", value: data)])
+    }
+}
+
+/// 配置读写诊断日志(直接写文件,确保任何进程都能留痕)
+public func configDebugLog(_ message: String) {
+    let line = "\(Date()) [pid \(getpid())] \(message)\n"
+    let url = URL(fileURLWithPath: "/tmp/flowbox-config-debug.log")
+    if let handle = try? FileHandle(forWritingTo: url) {
+        handle.seekToEndOfFile()
+        if let d = line.data(using: .utf8) { handle.write(d) }
+        try? handle.close()
+    } else if let d = line.data(using: .utf8) {
+        try? d.write(to: url)
+    }
 }
 
 /// 配置文件位置约定:
-/// macOS 13+ 要求 Finder 扩展必须沙盒化,否则 PlugInKit 会拒绝收录
-/// ("plug-ins must be sandboxed")。扩展沙盒后只能读写自己的容器目录,
-/// 因此配置统一放在扩展容器内;宿主 App 未沙盒,可直接读写同一路径。
+/// 1.0.4 及以前放在 Finder 扩展的沙盒容器内(当时宿主 App 可以直接读写)。
+/// macOS 27 起系统拒绝其它进程在 App 容器内创建文件(errno 1),宿主写配置会静默失败,
+/// 导致"设置勾选后重启即丢"。因此 1.0.5 起配置搬到宿主自己的
+/// ~/Library/Application Support/FlowBox/(无容器保护,宿主可读写);
+/// 扩展(沙盒)凭 build.sh 中声明的只读临时例外
+/// com.apple.security.temporary-exception.files.home-relative-path.read-only 读取,
+/// 配置的写入方只有宿主 App 一家。
 public enum ConfigStore {
 
     /// 扩展的 bundle id,须与 build.sh 中 EXT_BUNDLE_ID 一致
@@ -58,24 +82,43 @@ public enum ConfigStore {
     /// 旧容器里的用户配置需要搬过来,否则升级后设置会丢)
     private static let legacyExtBundleIDs = ["com.ysd.flowbox.ext"]
 
-    /// 首次启动时把旧容器的 config.json 搬到新容器(只搬一次:新配置已存在则跳过)
+    /// 配置迁移链:旧 bundle id 容器 / 扩展容器 → 新位置(只搬一次:新配置已存在则跳过)。
+    /// 现役扩展容器里的配置是最新的:它在但本进程读不到(macOS 27 的宿主)时不降级到
+    /// 更旧的来源占位,留给扩展通过 cfgsync 递送,避免旧配置覆盖用户最新配置。
     static func migrateLegacyConfigIfNeeded() {
         let fm = FileManager.default
-        let newURL = configURL
-        if fm.fileExists(atPath: newURL.path) { return }
+        guard !fm.fileExists(atPath: configURL.path) else { return }
+        if fm.fileExists(atPath: extContainerConfigURL.path) {
+            if let data = try? Data(contentsOf: extContainerConfigURL) {
+                writeMigrated(data, from: extContainerConfigURL)
+            } else {
+                configDebugLog("扩展容器配置存在但本进程不可读,等待扩展递送: \(extContainerConfigURL.path)")
+            }
+            return
+        }
         for legacy in legacyExtBundleIDs {
-            let legacyURL = URL(fileURLWithPath: realHomePath, isDirectory: true)
+            let src = URL(fileURLWithPath: realHomePath, isDirectory: true)
                 .appendingPathComponent("Library/Containers/\(legacy)/Data")
                 .appendingPathComponent("Library/Application Support/FlowBox/config.json")
-            guard fm.fileExists(atPath: legacyURL.path) else { continue }
-            do {
-                try fm.createDirectory(
-                    at: newURL.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
-                try fm.copyItem(at: legacyURL, to: newURL)
-            } catch { continue }
-            break
+            guard fm.fileExists(atPath: src.path) else { continue }
+            if let data = try? Data(contentsOf: src) {
+                writeMigrated(data, from: src)
+                return
+            }
+        }
+    }
+
+    /// 把读到的旧配置内容写到新位置(不拷元数据:对受保护路径 copyItem 会被拒)
+    private static func writeMigrated(_ data: Data, from src: URL) {
+        do {
+            try FileManager.default.createDirectory(
+                at: configURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: configURL, options: .atomic)
+            configDebugLog("配置已从 \(src.path) 迁移到 \(configURL.path)")
+        } catch {
+            configDebugLog("配置迁移失败(源 \(src.path)): \(error)")
         }
     }
 
@@ -87,7 +130,14 @@ public enum ConfigStore {
         return NSHomeDirectory()
     }
 
+    /// 配置位置(1.0.5 起):宿主 App 的 Application Support(宿主唯一可写,扩展只读)
     public static var configURL: URL {
+        URL(fileURLWithPath: realHomePath, isDirectory: true)
+            .appendingPathComponent("Library/Application Support/FlowBox/config.json")
+    }
+
+    /// 配置旧位置(1.0.4 及以前):扩展沙盒容器,仅作迁移源
+    public static var extContainerConfigURL: URL {
         URL(fileURLWithPath: realHomePath, isDirectory: true)
             .appendingPathComponent("Library/Containers/\(extBundleID)/Data")
             .appendingPathComponent("Library/Application Support/FlowBox/config.json")
@@ -166,12 +216,19 @@ public struct MenuVisibility: Codable, Equatable {
 public struct ScrollConfig: Codable, Equatable {
     /// 反转外接鼠标滚轮方向(触控板不受影响)
     public var reverseMouseWheel = false
-    /// 平滑滚动:把离散滚轮事件转成连续的流畅滚动
-    public var smoothScrolling = false
+    /// 平滑滚动:把离散滚轮事件转成连续的流畅滚动(新装机默认开;老配置缺字段仍保持关闭,见解码兜底)
+    public var smoothScrolling = true
     /// 最短步长:控制单次滚动的最短距离(以 60 为中性基准缩放输入像素量)
     public var minStep: Double = 60
 
     public init() {}
+
+    /// 老配置整节缺失(功能上线前的版本)时兜底用:没显式开过的用户不自动开启
+    public static func legacyDefault() -> ScrollConfig {
+        var c = ScrollConfig()
+        c.smoothScrolling = false
+        return c
+    }
 
     enum CodingKeys: String, CodingKey {
         case reverseMouseWheel, smoothScrolling, minStep
@@ -181,6 +238,7 @@ public struct ScrollConfig: Codable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         // 旧配置缺少的字段用默认值兜底,避免整体解码失败丢掉模板数据
         reverseMouseWheel = try c.decodeIfPresent(Bool.self, forKey: .reverseMouseWheel) ?? false
+        // 注意:此处兜底刻意与新装机默认(true)不同——升级上来的老用户没显式开过,不自动改变其滚轮行为
         smoothScrolling = try c.decodeIfPresent(Bool.self, forKey: .smoothScrolling) ?? false
         minStep = try c.decodeIfPresent(Double.self, forKey: .minStep) ?? 60
     }
@@ -210,8 +268,8 @@ public struct QuarantineConfig: Codable, Equatable {
 
 /// 人脸检测自动锁屏设置(纯本地 Vision 检测,不联网不存图)
 public struct PresenceConfig: Codable, Equatable {
-    /// 是否启用「离开自动锁屏」
-    public var enabled = false
+    /// 是否启用「离开自动锁屏」(新装机默认开;老配置缺字段仍保持关闭,见解码兜底)
+    public var enabled = true
     /// 无操作多少秒后标记疑似离开(3~30)
     public var lockAfterSeconds: Double = 8
     /// 空闲多少秒后开摄像头做一次人脸确认(10~300)
@@ -229,6 +287,13 @@ public struct PresenceConfig: Codable, Equatable {
 
     public init() {}
 
+    /// 老配置整节缺失(功能上线前的版本)时兜底用:摄像头属敏感权限,没显式开过的用户不自动开启
+    public static func legacyDefault() -> PresenceConfig {
+        var c = PresenceConfig()
+        c.enabled = false
+        return c
+    }
+
     enum CodingKeys: String, CodingKey {
         case enabled, lockAfterSeconds, confirmAfterSeconds, gracePeriod, saveCaptureOnLock
         case strangerLockEnabled, ownerFaceprint, ownerMatchThreshold
@@ -236,6 +301,7 @@ public struct PresenceConfig: Codable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        // 注意:此处兜底刻意与新装机默认(true)不同——摄像头属敏感权限,老用户没显式开过就不自动开
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
         lockAfterSeconds = try c.decodeIfPresent(Double.self, forKey: .lockAfterSeconds) ?? 8
         confirmAfterSeconds = try c.decodeIfPresent(Double.self, forKey: .confirmAfterSeconds) ?? 60
@@ -329,6 +395,8 @@ public struct RecordingConfig: Codable, Equatable {
 }
 
 public struct AppConfig: Codable, Equatable {
+    /// 配置结构版本:1=1.0.4 及以前(无版本号,解码兜底),2=流畅滚动+人脸锁屏默认开启
+    public var schemaVersion: Int
     public var language: String
     public var menu: MenuVisibility
     public var scroll: ScrollConfig
@@ -348,7 +416,8 @@ public struct AppConfig: Codable, Equatable {
         recording: RecordingConfig = RecordingConfig(),
         quarantine: QuarantineConfig = QuarantineConfig(),
         presence: PresenceConfig = PresenceConfig(),
-        newFiles: [NewFileItem]
+        newFiles: [NewFileItem],
+        schemaVersion: Int = 2
     ) {
         self.language = language
         self.menu = menu
@@ -359,22 +428,26 @@ public struct AppConfig: Codable, Equatable {
         self.quarantine = quarantine
         self.presence = presence
         self.newFiles = newFiles
+        self.schemaVersion = schemaVersion
     }
 
     enum CodingKeys: String, CodingKey {
-        case language, menu, scroll, menuBar, screenshot, recording, quarantine, presence, newFiles
+        case schemaVersion, language, menu, scroll, menuBar, screenshot, recording, quarantine, presence, newFiles
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        // 1.0.4 及以前的配置没有版本号字段,视为 1(升级时触发 1→2 迁移)
+        schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
         language = try c.decodeIfPresent(String.self, forKey: .language) ?? "system"
         menu = try c.decodeIfPresent(MenuVisibility.self, forKey: .menu) ?? MenuVisibility()
-        scroll = try c.decodeIfPresent(ScrollConfig.self, forKey: .scroll) ?? ScrollConfig()
+        // 整节缺失的老配置用 legacyDefault(而非新装机默认),保证平滑滚动/人脸锁屏不会被自动打开
+        scroll = try c.decodeIfPresent(ScrollConfig.self, forKey: .scroll) ?? ScrollConfig.legacyDefault()
         menuBar = try c.decodeIfPresent(MenuBarConfig.self, forKey: .menuBar) ?? MenuBarConfig()
         screenshot = try c.decodeIfPresent(ScreenshotConfig.self, forKey: .screenshot) ?? ScreenshotConfig()
         recording = try c.decodeIfPresent(RecordingConfig.self, forKey: .recording) ?? RecordingConfig()
         quarantine = try c.decodeIfPresent(QuarantineConfig.self, forKey: .quarantine) ?? QuarantineConfig()
-        presence = try c.decodeIfPresent(PresenceConfig.self, forKey: .presence) ?? PresenceConfig()
+        presence = try c.decodeIfPresent(PresenceConfig.self, forKey: .presence) ?? PresenceConfig.legacyDefault()
         newFiles = try c.decodeIfPresent([NewFileItem].self, forKey: .newFiles) ?? []
     }
 
@@ -383,13 +456,42 @@ public struct AppConfig: Codable, Equatable {
     /// 读取配置;文件不存在或损坏时写入并返回默认配置。
     public static func load() -> AppConfig {
         ConfigStore.migrateLegacyConfigIfNeeded()
-        if let data = try? Data(contentsOf: configURL),
-           let config = try? JSONDecoder().decode(AppConfig.self, from: data) {
+        if let data = try? Data(contentsOf: configURL), let config = decodeAndMigrate(data) {
+            return config
+        }
+        // Group 容器暂不可用(如扩展进程缺 entitlement)时回退读旧位置,避免整份配置退回默认值
+        if let data = try? Data(contentsOf: ConfigStore.extContainerConfigURL),
+           let config = decodeAndMigrate(data) {
             return config
         }
         let config = defaultConfig()
+        // 新位置没有配置、但扩展容器里存在旧配置(宿主读不到)时,先不落盘默认值:
+        // 等扩展通过 cfgsync 把旧配置递过来,避免默认值抢先占位导致用户配置丢失
+        if FileManager.default.fileExists(atPath: ConfigStore.extContainerConfigURL.path) {
+            return config
+        }
         config.write()
         return config
+    }
+
+    /// 解码 + 1→2 迁移:流畅滚动/人脸锁屏自 1.0.5 起默认开启,替升级用户把这两项翻开并落盘;
+    /// 之后用户在设置里关掉会显式写成 false,版本号已是 2,不会再被翻开
+    private static func decodeAndMigrate(_ data: Data) -> AppConfig? {
+        guard var config = try? JSONDecoder().decode(AppConfig.self, from: data) else { return nil }
+        if config.schemaVersion < 2 {
+            config = upgradeToV2(config)
+            config.write()
+        }
+        return config
+    }
+
+    /// 1→2 迁移的纯转换(不写盘,load() 负责落盘):翻开流畅滚动与人脸锁屏
+    public static func upgradeToV2(_ c: AppConfig) -> AppConfig {
+        var n = c
+        n.scroll.smoothScrolling = true
+        n.presence.enabled = true
+        n.schemaVersion = 2
+        return n
     }
 
     public static var configURL: URL {
@@ -400,11 +502,17 @@ public struct AppConfig: Codable, Equatable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(self) else { return }
-        try? FileManager.default.createDirectory(
-            at: ConfigStore.configURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try? data.write(to: ConfigStore.configURL, options: .atomic)
+        do {
+            try FileManager.default.createDirectory(
+                at: ConfigStore.configURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: ConfigStore.configURL, options: .atomic)
+            configDebugLog("配置已写入 \(ConfigStore.configURL.path) (\(data.count) 字节)")
+        } catch {
+            // 写失败原先被 try? 吞掉,导致"勾选不生效、重启丢失"难以排查,这里留痕
+            configDebugLog("配置写入失败: \(error)")
+        }
     }
 
     public static func defaultConfig() -> AppConfig {

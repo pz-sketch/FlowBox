@@ -281,8 +281,34 @@ enum CommandExecutor {
             if let dir = query["dir"], let index = query["index"].flatMap(Int.init) {
                 createFile(index: index, in: URL(fileURLWithPath: dir))
             }
+        case "cfgsync":
+            if let b64 = query["data"], let data = Data(base64Encoded: b64) {
+                acceptConfigSync(data)
+            }
         default:
             NSLog("[FlowBox] 宿主:未知命令 \(url.host ?? "?")")
+        }
+    }
+
+    /// 扩展递来的旧容器配置:校验可解码且新位置尚无配置时落盘(有则忽略,不覆盖新数据),
+    /// 随后走一次 load() 完成 1→2 迁移
+    private static func acceptConfigSync(_ data: Data) {
+        guard (try? JSONDecoder().decode(AppConfig.self, from: data)) != nil else {
+            NSLog("[FlowBox] 宿主:cfgsync 数据不是合法配置,忽略")
+            return
+        }
+        let fm = FileManager.default
+        guard !fm.fileExists(atPath: ConfigStore.configURL.path) else { return }
+        do {
+            try fm.createDirectory(
+                at: ConfigStore.configURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: ConfigStore.configURL, options: .atomic)
+            configDebugLog("已接收扩展递来的配置并写入 \(ConfigStore.configURL.path)")
+            _ = AppConfig.load()
+        } catch {
+            configDebugLog("cfgsync 写入失败: \(error)")
         }
     }
 
