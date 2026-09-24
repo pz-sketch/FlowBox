@@ -116,14 +116,22 @@ final class FinderSync: FIFinderSync {
         return URL(fileURLWithPath: NSHomeDirectory())
     }
 
-    /// 把命令转发给宿主 App 执行(沙盒内的扩展只负责菜单与取路径)
+    /// 把命令转发给宿主 App 执行(沙盒内的扩展只负责菜单与取路径)。
+    ///
+    /// 必须用 `activates = false`:默认的 `NSWorkspace.open` 会把宿主拉到前台,
+    /// 宿主是 LSUIElement(无 Dock 图标),于是用户看到的是「点了菜单、画面闪一下」
+    /// (实测激活约 80ms,随后 AppleScript 才把 Finder 切回来)。关掉激活后
+    /// 命令照常送达,视觉上不留痕。
     private func dispatch(_ url: URL?) {
         guard let url = url else {
             NSLog("[FlowBox] 命令 URL 构造失败")
             return
         }
-        let ok = NSWorkspace.shared.open(url)
-        NSLog("[FlowBox] 已派发 \(url.host ?? "?") → 宿主App \(ok ? "成功" : "失败")")
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = false
+        NSWorkspace.shared.open(url, configuration: config) { _, error in
+            NSLog("[FlowBox] 已派发 \(url.host ?? "?") → 宿主App \(error == nil ? "成功" : "失败:\(error!)")")
+        }
     }
 
     // MARK: - 动作
