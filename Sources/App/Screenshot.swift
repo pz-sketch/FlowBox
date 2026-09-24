@@ -60,6 +60,8 @@ final class ScreenshotSession: NSObject {
     private var overlays: [OverlayWindow] = []
     private var activeOverlay: OverlayView?
     private var keyMonitor: Any?
+    /// 进入截图前正在前台的应用:结束时把焦点还回去(见 close())
+    private var previousApp: NSRunningApplication?
 
     private init(config: ScreenshotConfig) {
         self.config = config
@@ -162,6 +164,17 @@ final class ScreenshotSession: NSObject {
         ScreenshotSession.isActive = true
         ScreenshotSession.current = self
 
+        // 记下当前前台应用,结束时还给它。浮层要收键盘就得让本应用成为前台,
+        // 但截图是「临时借用」焦点:不还回去的话,用户原来在用的窗口一直失活
+        // (标题栏灰着、敲键盘没反应),再点回去时又会闪一下。
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.bundleIdentifier != Bundle.main.bundleIdentifier {
+            previousApp = front
+        } else {
+            previousApp = nil
+        }
+        shotDebugLog("会话开始:前台=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil") 将还焦点给=\(previousApp?.bundleIdentifier ?? "nil(不还)")")
+
         NSApp.activate(ignoringOtherApps: true)
         for item in captured {
             let overlay = OverlayWindow(screen: item.screen, image: item.image, session: self)
@@ -221,7 +234,12 @@ final class ScreenshotSession: NSObject {
         close()
     }
 
-    private func close() {
+    /// 结束会话并收起浮层。
+    ///
+    /// - Parameter restoreFocus: 是否把前台焦点还给截图前的应用(见 previousApp)。
+    ///   复制/取消都要还;「保存到桌面」不要 —— 那条路径紧接着会
+    ///   `activateFileViewerSelecting` 让 Finder 选中新文件,还焦点会把 Finder 顶掉。
+    private func close(restoreFocus: Bool = true) {
         if let monitor = keyMonitor {
             NSEvent.removeMonitor(monitor)
             keyMonitor = nil
@@ -232,6 +250,18 @@ final class ScreenshotSession: NSObject {
         activeOverlay = nil
         ScreenshotSession.isActive = false
         ScreenshotSession.current = nil
+        guard restoreFocus, let previous = previousApp, !previous.isTerminated else {
+            previousApp = nil
+            return
+        }
+        previousApp = nil
+        // 必须等浮层真正撤下去之后再还焦点:浮层是 .screenSaver 层级且刚还在 key window 上,
+        // 同一轮 runloop 里直接 activate 会被窗口层的拆除过程盖掉(实测 activate 返回 true
+        // 但前台仍是本应用)。放到下一轮主队列执行,让 orderOut 先生效。
+        DispatchQueue.main.async {
+            let ok = previous.activate(options: [])
+            shotDebugLog("还焦点给 \(previous.bundleIdentifier ?? "?") 结果=\(ok) 当前前台=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil")")
+        }
     }
 
     /// 选区(含标注)渲染为 PNG 并复制到剪贴板
@@ -259,7 +289,8 @@ final class ScreenshotSession: NSObject {
         do {
             try png.write(to: url)
             let center = screenPoint(of: view, viewPoint: NSPoint(x: sel.midX, y: sel.midY))
-            close()
+            // 不还焦点:紧接着要激活 Finder 选中新文件
+            close(restoreFocus: false)
             NSWorkspace.shared.activateFileViewerSelecting([url])
             ToastWindow.show(text: L10n.tr("已保存到桌面", "Saved to Desktop"), at: center)
             NSLog("[FlowBox] 截图:已保存 \(url.path)")
