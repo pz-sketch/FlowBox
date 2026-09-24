@@ -4,6 +4,10 @@ import SharedCore
 
 final class FinderSync: FIFinderSync {
 
+    /// 菜单打开时算好的「进入上级目录」落点,供 actGoUp 取用。
+    /// 不能靠菜单项的 representedObject 传递:它过不去 Finder 的 XPC 边界,点击时是 nil。
+    private var pendingGoUpDestination: URL?
+
     override init() {
         super.init()
         // 把根目录注册为同步根,保证在任意位置右键都能出现菜单
@@ -54,6 +58,18 @@ final class FinderSync: FIFinderSync {
 
         if config.menu.openTerminal {
             menu.addItem(menuItem(L10n.tr("在终端中打开", "Open in Terminal"), #selector(actTerminal)))
+        }
+
+        if config.menu.goUp {
+            // 落点在菜单构造时算好(此刻才取得到 targetedURL),点击时取用。
+            // targetedURL 始终是窗口浏览的目录,与右键位置无关(实机验证),
+            // 所以不必按 menuKind 分支,直接取其父目录。
+            pendingGoUpDestination = EnclosingFolder.destination(
+                target: FIFinderSyncController.default().targetedURL()
+            )
+            let goUp = menuItem(L10n.tr("进入上级目录", "Enclosing Folder"), #selector(actGoUp))
+            goUp.isEnabled = pendingGoUpDestination != nil
+            menu.addItem(goUp)
         }
 
         if config.menu.newFile {
@@ -130,6 +146,17 @@ final class FinderSync: FIFinderSync {
         NSLog("[FlowBox] 点击:在终端中打开")
         guard let dir = targetDirectory() else { return }
         dispatch(RCCommand.terminal(dir: dir.path))
+    }
+
+    @objc func actGoUp() {
+        NSLog("[FlowBox] 点击:进入上级目录")
+        // 落点在 menu(for:) 里算好(targetedURL 只在菜单构造/动作回调里有效),这里取用
+        guard let destination = pendingGoUpDestination else {
+            NSLog("[FlowBox] 已无上级可去(根目录或未取到目标)")
+            return
+        }
+        pendingGoUpDestination = nil
+        dispatch(RCCommand.goUp(dir: destination.path))
     }
 
     @objc func actNewFile(_ sender: NSMenuItem) {

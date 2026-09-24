@@ -25,6 +25,12 @@ public enum RCCommand {
         url(host: "terminal", query: [URLQueryItem(name: "dir", value: dir)])
     }
 
+    /// 让 Finder 导航到 dir —— 扩展已按 EnclosingFolder 把「上级目录」算好,
+    /// dir 就是要去的落点(不是当前位置),宿主只管过去,不再往上算一层
+    public static func goUp(dir: String) -> URL? {
+        url(host: "goup", query: [URLQueryItem(name: "dir", value: dir)])
+    }
+
     /// 按配置序号新建文件
     public static func newFile(dir: String, index: Int) -> URL? {
         url(host: "newfile", query: [
@@ -195,12 +201,14 @@ public struct MenuVisibility: Codable, Equatable {
     public var copyFolder = true
     public var copySelection = true
     public var openTerminal = true
+    /// 进入上级目录(Finder 当前目录的父目录)
+    public var goUp = true
     public var newFile = true
 
     public init() {}
 
     enum CodingKeys: String, CodingKey {
-        case copyFolder, copySelection, openTerminal, newFile
+        case copyFolder, copySelection, openTerminal, goUp, newFile
     }
 
     public init(from decoder: Decoder) throws {
@@ -208,6 +216,7 @@ public struct MenuVisibility: Codable, Equatable {
         copyFolder = try c.decodeIfPresent(Bool.self, forKey: .copyFolder) ?? true
         copySelection = try c.decodeIfPresent(Bool.self, forKey: .copySelection) ?? true
         openTerminal = try c.decodeIfPresent(Bool.self, forKey: .openTerminal) ?? true
+        goUp = try c.decodeIfPresent(Bool.self, forKey: .goUp) ?? true
         newFile = try c.decodeIfPresent(Bool.self, forKey: .newFile) ?? true
     }
 }

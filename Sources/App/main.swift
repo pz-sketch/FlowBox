@@ -204,7 +204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = L10n.tr(
             """
             1. 在 Finder 任意位置右键,即可看到「FlowBox」子菜单
-            2. 功能:复制当前目录路径 / 复制所选文件路径 / 在终端中打开 / 新建文件
+            2. 功能:复制当前目录路径 / 复制所选文件路径 / 在终端中打开 / 进入上级目录 / 新建文件
             3. 按快捷键(默认 ⌥A)框选截图:画笔 / 马赛克标注后 Enter 复制到剪贴板
             4. 点击菜单栏图标 →「设置…」可自定义功能、模板与截图快捷键,改动即时生效
             5. 菜单栏 →「录屏转 GIF…」可把录屏 .mov(或任意 mov/mp4)转成 GIF,帧率/宽度可选
@@ -216,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             """,
             """
             1. Right-click anywhere in Finder to see the "FlowBox" submenu
-            2. Features: Copy folder path / Copy selected paths / Open in Terminal / New file
+            2. Features: Copy folder path / Copy selected paths / Open in Terminal / Enclosing Folder / New file
             3. Press the hotkey (default ⌥A) to capture a region: annotate with pen / mosaic, then press Enter to copy
             4. Menu bar icon → "Settings…" to customize features, templates & hotkeys — changes apply instantly
             5. Menu bar → "Recording → GIF…" converts a recording .mov (or any mov/mp4) to GIF with selectable fps/width
@@ -280,6 +280,10 @@ enum CommandExecutor {
         case "terminal":
             if let dir = query["dir"] {
                 openTerminal(path: dir)
+            }
+        case "goup":
+            if let dir = query["dir"] {
+                goUp(to: dir)
             }
         case "qxattr":
             if let raw = query["paths"] {
@@ -346,6 +350,38 @@ enum CommandExecutor {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+    }
+
+    /// 把 Finder 的当前窗口导航到 `path` —— path 已是扩展算好的落点(上级目录)。
+    ///
+    /// 走 AppleScript 改 front window 的 target,等价于 ⌘↑:在同一个窗口里往上走一层。
+    /// 实测 `NSWorkspace.selectFile(nil, inFileViewerRootedAtPath:)` 是**新开一个窗口**
+    /// (窗口数 3 → 4),不是「进入上级目录」该有的观感,所以不用它。
+    /// 代价:首次会要一次「自动化 → 控制访达」授权,与「在终端中打开」同类;
+    /// 用户右键时看的那个窗口就是 front window,和 ⌘↑ 的语义一致。
+    private static func goUp(to path: String) {
+        let destination = URL(fileURLWithPath: path, isDirectory: true)
+        NSLog("[FlowBox] 宿主:进入上级目录 → \(destination.path)")
+        let script = """
+        tell application "Finder"
+            set target of front window to (POSIX file "\(escaped(destination.path))")
+            activate
+        end tell
+        """
+        var error: NSDictionary?
+        NSAppleScript(source: script)?.executeAndReturnError(&error)
+        guard let error = error else { return }
+        // 无窗口可导航(例如 Finder 只开着「桌面」)或未授权时,退化成新开一个窗口到该目录
+        NSLog("[FlowBox] 宿主:AppleScript 导航失败 \(error),回退新窗口方式")
+        if !NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: destination.path) {
+            NSLog("[FlowBox] 宿主:回退方案也失败:\(destination.path)")
+        }
+    }
+
+    /// AppleScript 字符串字面量里的转义(路径可能含引号/反斜杠)
+    private static func escaped(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     private static func openTerminal(path: String) {

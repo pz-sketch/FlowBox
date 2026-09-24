@@ -38,6 +38,7 @@ print("=== FlowBox Core Tests (CLT runner) ===")
 do {
     let cfg=AppConfig.defaultConfig()
     check(cfg.menu.copyFolder==true, "default menu.copyFolder true")
+    check(cfg.menu.goUp==true, "default menu.goUp true")
     check(cfg.newFiles.count>=1, "default newFiles >=1")
     checkNear(cfg.scroll.minStep, 60, "default scroll.minStep 60")
     check(cfg.scroll.smoothScrolling==true, "default smoothScrolling on")
@@ -125,6 +126,7 @@ do {
     check(RCCommand.copy(text:"hi")?.scheme=="flowbox", "RC copy scheme")
     check(RCCommand.copy(text:"hi")?.host=="copy", "RC copy host")
     check(RCCommand.terminal(dir:"/tmp")?.host=="terminal", "RC terminal")
+    check(RCCommand.goUp(dir:"/tmp")?.host=="goup", "RC goUp")
     check(RCCommand.newFile(dir:"/tmp",index:0)?.host=="newfile", "RC newFile")
     check(RCCommand.stripQuarantine(paths:["/a","/b"]) != nil, "RC strip not nil")
     check(RCCommand.stripQuarantine(paths:[])==nil, "RC strip empty nil")
@@ -509,6 +511,33 @@ do {
           "icon fits inside the row with breathing room")
     check(MenuRowLayout.titleFontSize < MenuRowLayout.iconSide,
           "title stays smaller than the icon")
+}
+
+// EnclosingFolder
+do {
+    let proj = URL(fileURLWithPath: "/Users/someone/work/proj", isDirectory: true)
+
+    // targetedURL 始终是窗口浏览的目录(实机验证),落点就是它的父目录。
+    // 曾经按「项目上右键要往上游两层」处理,实机验证是错的(会一次跳两层)。
+    checkEq(EnclosingFolder.destination(target: proj)?.path, "/Users/someone/work",
+            "destination is the parent of the browsed directory")
+    // 在文件/文件夹上右键时 targetedURL 给的是其所在目录,所以同样只上一层
+    checkEq(EnclosingFolder.destination(target: URL(fileURLWithPath: "/Users/someone/work/proj/a.txt"))?.path,
+            "/Users/someone/work/proj",
+            "a file target resolves relative to its own directory")
+
+    // 取不到目标目录时不做无效跳转
+    check(EnclosingFolder.destination(target: nil) == nil,
+          "no targeted URL yields no destination")
+
+    // 根目录没有上级(deletingLastPathComponent 在根目录返回的是字面量 "/..",不是 "/")
+    check(EnclosingFolder.destination(target: URL(fileURLWithPath: "/", isDirectory: true)) == nil,
+          "root destination is nil rather than a no-op jump")
+
+    // 挂载卷根目录(如 /Volumes/X)有上级,不该被上面的根判断误伤
+    checkEq(EnclosingFolder.destination(target: URL(fileURLWithPath: "/Volumes/X", isDirectory: true))?.path,
+            "/Volumes",
+            "volume root still has a parent")
 }
 
 print("\n=== Result: \(passed) passed, \(failed) failed ===")

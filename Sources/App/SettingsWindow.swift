@@ -530,6 +530,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         case "copyFolder": config.menu.copyFolder = on
         case "copySelection": config.menu.copySelection = on
         case "openTerminal": config.menu.openTerminal = on
+        case "goUp": config.menu.goUp = on
         case "newFile": config.menu.newFile = on
         default: return
         }

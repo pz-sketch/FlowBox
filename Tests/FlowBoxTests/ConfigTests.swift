@@ -9,6 +9,7 @@ struct ConfigTests {
     func defaultAppConfig() {
         let cfg = AppConfig.defaultConfig()
         #expect(cfg.menu.copyFolder == true)
+        #expect(cfg.menu.goUp == true)
         #expect(cfg.newFiles.count >= 1)
         #expect(abs(cfg.scroll.minStep - 60) < 0.01)
         #expect(abs(cfg.screenshot.penWidth - 4) < 0.01)
@@ -119,6 +120,7 @@ struct ConfigTests {
         #expect(copy?.scheme == "flowbox")
         #expect(copy?.host == "copy")
         #expect(RCCommand.terminal(dir: "/tmp")?.host == "terminal")
+        #expect(RCCommand.goUp(dir: "/tmp")?.host == "goup")
         #expect(RCCommand.newFile(dir: "/tmp", index: 0)?.host == "newfile")
         #expect(RCCommand.stripQuarantine(paths: ["/a","/b"]) != nil)
         #expect(RCCommand.stripQuarantine(paths: []) == nil)

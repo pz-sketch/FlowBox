@@ -40,7 +40,7 @@ It is built with Swift and Apple-native frameworks rather than Electron. It is d
 
 | Module | What it does |
 | --- | --- |
-| **Finder context menu** | Copy folder or selection paths, open the current folder in Terminal, and create files from templates. |
+| **Finder context menu** | Copy folder or selection paths, open the current folder in Terminal, jump to the enclosing folder, and create files from templates. |
 | **Screenshot & annotation** | Freeze the screen, select an area, then use pen, mosaic, text, rectangle, ellipse, and undo; copy PNG or save it to the Desktop. |
 | **Screen recording** | Record the main display to `.mov`, with optional system audio, microphone, and camera PiP. |
 | **Recording → GIF** | Convert a recording (or any mov/mp4) to an animated GIF via menu bar → Recording → GIF…, with adjustable frame rate and width; runs fully on-device. |
@@ -115,7 +115,7 @@ FlowBox requests macOS permissions by feature; you do not need to grant every pe
 
 | Feature | Permission that may be required |
 | --- | --- |
-| Finder context menu | Finder Sync extension switch; opening Terminal may request Automation permission the first time. |
+| Finder context menu | Finder Sync extension switch; opening Terminal or jumping to the enclosing folder may request Automation permission the first time. |
 | Screenshots / screen recording | Screen Recording. |
 | System audio capture | Screen Recording. |
 | Microphone input | Microphone. |
@@ -260,7 +260,7 @@ FlowBox 把一组高频 macOS 操作放进一个轻量菜单栏应用：Finder �
 
 | 模块 | 能做什么 |
 | --- | --- |
-| **Finder 右键菜单** | 复制当前目录路径、复制所选文件路径、在 Terminal 中打开目录、从模板新建文件。 |
+| **Finder 右键菜单** | 复制当前目录路径、复制所选文件路径、在 Terminal 中打开目录、进入上级目录、从模板新建文件。 |
 | **截图与标注** | 冻结屏幕、框选区域，拖动移动选区，使用画笔、马赛克、文字、矩形、椭圆和撤销；复制 PNG 或保存到桌面。 |
 | **屏幕录制** | 录制主屏幕并保存为 `.mov`；可选系统声音、麦克风和摄像头画中画。 |
 | **录屏转 GIF** | 把录屏（或任意 mov/mp4）转成动图 GIF：菜单栏 →「录屏转 GIF…」，可调帧率与最大宽度，全程本机处理；完成后直接弹出 Quick Look 播放动画（无需去 Finder 双击）。 |
@@ -335,7 +335,7 @@ FlowBox 按功能请求 macOS 权限，不同功能不需要全部授权：
 
 | 功能 | 可能需要的权限 |
 | --- | --- |
-| Finder 右键菜单 | Finder Sync 扩展开关；“在终端中打开”首次使用可能需要自动化权限。 |
+| Finder 右键菜单 | Finder Sync 扩展开关；“在终端中打开”“进入上级目录”首次使用可能需要自动化权限。 |
 | 截图 / 屏幕录制 | 屏幕录制。 |
 | 系统声音录制 | 屏幕录制。 |
 | 麦克风画面 | 麦克风。 |

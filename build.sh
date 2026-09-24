@@ -62,6 +62,8 @@ cat > "${APP_ROOT}/Contents/Info.plist" <<EOF
 		<string>人脸看守在本地检测是否有人(画面只进内存,不保存不上传);录屏时可在画面上叠加摄像头画中画</string>
 	<key>NSScreenCaptureDescription</key>
 	<string>录屏/截图时采集屏幕画面与系统声音</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>「进入上级目录」需要在 Finder 当前窗口里返回上一级;「在终端中打开」需要打开 Terminal</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

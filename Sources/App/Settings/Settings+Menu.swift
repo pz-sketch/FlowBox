@@ -18,6 +18,7 @@ extension SettingsWindowController {
             ("copyFolder", L10n.tr("复制当前目录路径", "Copy Folder Path")),
             ("copySelection", L10n.tr("复制所选文件路径", "Copy Selection Paths")),
             ("openTerminal", L10n.tr("在终端中打开", "Open in Terminal")),
+            ("goUp", L10n.tr("进入上级目录", "Enclosing Folder")),
             ("newFile", L10n.tr("新建文件", "New File")),
         ]
         let checksStack = UIStyle.vStack(spacing: UIStyle.Metrics.sp2)
